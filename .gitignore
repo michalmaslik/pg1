@@ -1,0 +1,13 @@
+# Visual Studio súbory na ignorovanie
+x64/
+.vs/
+*.user
+*.suo
+*.vcxproj.user
+*.cache
+*.pdb
+*.obj
+*.exe
+*.dll
+bin/
+obj/
