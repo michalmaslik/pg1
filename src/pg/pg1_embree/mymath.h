@@ -6,16 +6,16 @@
 #include <float.h>
 #include "structs.h"
 
-template <class T> inline T sqr( const T x )
+template <class T> inline T sqr(const T x)
 {
 	return x * x;
 }
 
-inline Normal3f normalize( const Normal3f & n )
+inline Normal3f normalize(const Normal3f& n)
 {
-	float tmp = sqr( n.x ) + sqr( n.y ) + sqr( n.z );
+	float tmp = sqr(n.x) + sqr(n.y) + sqr(n.z);
 
-	if ( fabsf( tmp ) > FLT_EPSILON )
+	if (fabsf(tmp) > FLT_EPSILON)
 	{
 		tmp = 1.0f / tmp;
 		return Normal3f{ n.x * tmp, n.y * tmp, n.z * tmp };
@@ -24,9 +24,15 @@ inline Normal3f normalize( const Normal3f & n )
 	return n;
 }
 
-inline float deg2rad( const float x )
+inline float deg2rad(const float x)
 {
-	return x * float( M_PI ) / 180.0f;
+	return x * float(M_PI) / 180.0f;
+}
+
+
+inline float rad2deg(const float x)
+{
+	return x * 180.0f / float(M_PI);
 }
 
 #endif

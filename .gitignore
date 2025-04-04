@@ -23,3 +23,6 @@ Thumbs.db
 *.userosscache
 *.suo
 *.user
+# Ignore all files in x64 folder (including Debug/Release folders)
+src/pg/pg1_embree/x64/
+src/pg/x64/

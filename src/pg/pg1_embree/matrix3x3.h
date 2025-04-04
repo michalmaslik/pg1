@@ -23,25 +23,29 @@ public:
 	/*!
 	Inicializace matice zadanými hodnotami. První index oznaèuje øádek, druhý index patøí sloupci.
 	*/
-	Matrix3x3( const float m00, const float m01, const float m02,
+	Matrix3x3(const float m00, const float m01, const float m02,
 		const float m10, const float m11, const float m12,
-		const float m20, const float m21, const float m22 );
+		const float m20, const float m21, const float m22);
 
-	Matrix3x3( const Vector3 basis_x, const Vector3 basis_y, const Vector3 basis_z );		
+	Matrix3x3(const Vector3 basis_x, const Vector3 basis_y, const Vector3 basis_z);
+
+	static Matrix3x3 RotationMatrixX(float angleDegrees);
+	static Matrix3x3 RotationMatrixY(float angleDegrees);
+	static Matrix3x3 RotationMatrixZ(float angleDegrees);
 
 	//! Transpozice matice.
 	/*!
 	Provede traspozici matice vzájemnou výmìnou øádkù a sloupcù.
 	*/
 	Matrix3x3 Transpose() const;
-	
+
 	//! Nastaví zadaný prvek matice na novou hodnotu.
 	/*!
 	\param row øádek matice.
 	\param column sloupec matice.
 	\param value nová hodnota prvku matice.
 	*/
-	void set( const int row, const int column, const float value );
+	void set(const int row, const int column, const float value);
 
 	//! Vrátí zadaný prvek matice.
 	/*!
@@ -49,10 +53,10 @@ public:
 	\param column sloupec matice.
 	\return Požadovaný prvek matice.
 	*/
-	float get( const int row, const int column ) const;
-	
-	friend Vector3 operator*( const Matrix3x3 & a, const Vector3 & b );
-	friend Matrix3x3 operator*( const Matrix3x3 & a, const Matrix3x3 & b );	
+	float get(const int row, const int column) const;
+
+	friend Vector3 operator*(const Matrix3x3& a, const Vector3& b);
+	friend Matrix3x3 operator*(const Matrix3x3& a, const Matrix3x3& b);
 
 private:
 #pragma warning( push )
@@ -60,8 +64,8 @@ private:
 	union
 	{
 		/* Row-major
-		m00 m01 m02 
-		m10 m11 m12 
+		m00 m01 m02
+		m10 m11 m12
 		m20 m21 m22
 		*/
 

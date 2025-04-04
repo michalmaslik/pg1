@@ -1,6 +1,8 @@
 #ifndef VECTOR3_H_
 #define VECTOR3_H_
 
+#include "structs.h"
+
 /*! \struct Vector3
 \brief Trojrozmìrný (3D) vektor.
 
@@ -40,7 +42,7 @@ public:
 	Inicializuje všechny složky vektoru na hodnotu nula,
 	\f$\mathbf{v}=\mathbf{0}\f$.
 	*/
-	Vector3() : x( 0 ), y( 0 ), z( 0 ) { }	
+	Vector3() : x(0), y(0), z(0) {}
 
 	//! Obecný konstruktor.
 	/*!
@@ -51,15 +53,15 @@ public:
 	\param y druhá složka vektoru.
 	\param z tøetí složka vektoru.
 	*/
-	Vector3( const float x, const float y, const float z ) : x( x ), y( y ), z( z ) { }
+	Vector3(const float x, const float y, const float z) : x(x), y(y), z(z) {}
 
 	//! Konstruktor z pole.
 	/*!
 	Inicializuje složky vektoru podle zadaných hodnot pole,
 
-	\param v ukazatel na první složka vektoru.	
+	\param v ukazatel na první složka vektoru.
 	*/
-	Vector3( const float * v );
+	Vector3(const float* v);
 
 	//! L2-norma vektoru.
 	/*!
@@ -87,17 +89,17 @@ public:
 	\mathbf{u}_z \mathbf{v}_x - \mathbf{u}_x \mathbf{v}_z,
 	\mathbf{u}_x \mathbf{v}_y - \mathbf{u}_y \mathbf{v}_x)\f$.
 	*/
-	Vector3 CrossProduct( const Vector3 & v ) const;	
+	Vector3 CrossProduct(const Vector3& v) const;
 
 	Vector3 Abs() const;
 
-	Vector3 Max( const float a = 0 ) const;
+	Vector3 Max(const float a = 0) const;
 
 	//! Skalární souèin.
-	/*!		
+	/*!
 	\return Hodnotu \f$\mathbf{u}_x \mathbf{v}_x + \mathbf{u}_y \mathbf{v}_y + \mathbf{u}_z \mathbf{v}_z)\f$.
 	*/
-	float DotProduct( const Vector3 & v ) const;	
+	float DotProduct(const Vector3& v) const;
 
 	//! Index nejvìtší složky vektoru.
 	/*!
@@ -105,29 +107,45 @@ public:
 
 	\return Index nejvìtší složky vektoru.
 	*/
-	char LargestComponent( const bool absolute_value = false );	
+	char LargestComponent(const bool absolute_value = false) const;
 
 	void Print();
 
+	Color3f ToColor3f();
+
+	Color3f ToColor3fCompressed();
+
+	Color4f ToColor4f();
+
+	Color4f ToColor4fCompressed();
+
+
 	// --- operátory ------
 
-	friend Vector3 operator-( const Vector3 & v );
+	friend Vector3 operator-(const Vector3& v);
 
-	friend Vector3 operator+( const Vector3 & u, const Vector3 & v );
-	friend Vector3 operator-( const Vector3 & u, const Vector3 & v );
+	friend Vector3 operator+(const Vector3& u, const Vector3& v);
+	friend Vector3 operator-(const Vector3& u, const Vector3& v);
 
-	friend Vector3 operator*( const Vector3 & v, const float a );	
-	friend Vector3 operator*( const float a, const Vector3 & v );
-	friend Vector3 operator*( const Vector3 & u, const Vector3 & v );
+	friend Vector3 operator*(const Vector3& v, const float a);
+	friend Vector3 operator*(const float a, const Vector3& v);
+	friend Vector3 operator*(const Vector3& u, const Vector3& v);
 
-	friend Vector3 operator/( const Vector3 & v, const float a );
+	friend Vector3 operator/(const Vector3& v, const float a);
 
-	friend void operator+=( Vector3 & u, const Vector3 & v );
-	friend void operator-=( Vector3 & u, const Vector3 & v );
-	friend void operator*=( Vector3 & v, const float a );
-	friend void operator/=( Vector3 & v, const float a );		
+	friend void operator+=(Vector3& u, const Vector3& v);
+	friend void operator-=(Vector3& u, const Vector3& v);
+	friend void operator*=(Vector3& v, const float a);
+	friend void operator/=(Vector3& v, const float a);
 
-	friend bool operator==( const Vector3 & u, const Vector3 & v );
+	friend bool operator==(const Vector3& u, const Vector3& v);
+
+	/*
+	explicit operator Color4f() const {
+		Color4f tmp = Color4f{ x, y, z, 1.0f };
+		tmp.compress(); // linear rgb to srgb
+		return tmp;
+	};*/
 };
 
 #endif
