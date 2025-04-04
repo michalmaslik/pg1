@@ -1,0 +1,25 @@
+# Windows thumbnail cache files
+Thumbs.db
+# Windows Installer files
+*.cab
+*.msi
+*.msm
+*.msp
+# Windows Installer files
+[Dd]esktop.ini
+# Windows Installer
+*.vssscc
+# Windows Installer
+*.vspscc
+# Windows Installer
+*.suo
+*.user
+*.userosscache
+*.suo
+# Visual Studio for Mac
+.vs/
+# User-specific files
+*.user
+*.userosscache
+*.suo
+*.user
