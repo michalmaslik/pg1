@@ -1,49 +1,49 @@
-#ifndef TRIANGLE_H_
+ï»¿#ifndef TRIANGLE_H_
 #define TRIANGLE_H_
 
 #include "vertex.h"
 
-class Surface; // dopøedná deklarace tøídy
+class Surface; // dopÅ™ednÃ¡ deklarace tÅ™Ã­dy
 
 /*! \class Triangle
 \brief A class representing single triangle in 3D.
 
-\author Tomáš Fabián
+\author TomÃ¡Å¡ FabiÃ¡n
 \version 1.1
 \date 2013-2018
 */
 class Triangle
 {
 public:	
-	//! Vıchozí konstruktor.
+	//! VÃ½chozÃ­ konstruktor.
 	/*!
-	Inicializuje všechny sloky trojúhelníku na hodnotu nula.
+	Inicializuje vÅ¡echny sloÅ¾ky trojÃºhelnÃ­ku na hodnotu nula.
 	*/
 	Triangle() { }
 
-	//! Obecnı konstruktor.
+	//! ObecnÃ½ konstruktor.
 	/*!
-	Inicializuje trojúhelník podle zadanıch hodnot parametrù.
+	Inicializuje trojÃºhelnÃ­k podle zadanÃ½ch hodnot parametrÅ¯.
 
-	\param v0 první vrchol trojúhelníka.
-	\param v1 druhı vrchol trojúhelníka.
-	\param v2 tøetí vrchol trojúhelníka.
-	\param surface ukazatel na plochu, jí je trojúhelník èlenem.
+	\param v0 prvnÃ­ vrchol trojÃºhelnÃ­ka.
+	\param v1 druhÃ½ vrchol trojÃºhelnÃ­ka.
+	\param v2 tÅ™etÃ­ vrchol trojÃºhelnÃ­ka.
+	\param surface ukazatel na plochu, jÃ­Å¾ je trojÃºhelnÃ­k Älenem.
 	*/
 	Triangle( const Vertex & v0, const Vertex & v1, const Vertex & v2, Surface * surface = NULL );
 
-	//! I-tı vrchol trojúhelníka.
+	//! I-tÃ½ vrchol trojÃºhelnÃ­ka.
 	/*!
-	\param i index vrcholu trojúhelníka.
+	\param i index vrcholu trojÃºhelnÃ­ka.
 
-	\return I-tı vrchol trojúhelníka.
+	\return I-tÃ½ vrchol trojÃºhelnÃ­ka.
 	*/
 	Vertex vertex( const int i );	
 
 	bool is_degenerate() const;
 
 private:
-	Vertex vertices_[3]; /*!< Vrcholy trojúhelníka. Nic jiného tu nesmí bıt, jinak padne VBO v OpenGL! */	
+	Vertex vertices_[3]; /*!< Vrcholy trojÃºhelnÃ­ka. Nic jinÃ©ho tu nesmÃ­ bÃ½t, jinak padne VBO v OpenGL! */	
 };
 
 #endif

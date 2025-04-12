@@ -1,20 +1,20 @@
-#ifndef OBJ_LOADER_H_
+ï»¿#ifndef OBJ_LOADER_H_
 #define OBJ_LOADER_H_
 
 #include "vector3.h"
 #include "surface.h"
 
 /*! \fn int LoadOBJ( const char * file_name, Vector3 & default_color, std::vector<Surface *> & surfaces, std::vector<Material *> & materials )
-\brief Naète geometrii z OBJ souboru \a file_name.
-\note Pøi exportu z 3ds max je nutné nastavit systémové jednotky na metry:
+\brief NaÄte geometrii z OBJ souboru \a file_name.
+\note PÅ™i exportu z 3ds max je nutnÃ© nastavit systÃ©movÃ© jednotky na metry:
 Customize -> Units Setup Metric (Meters)
-System Unit Setup -> 1 Unit = 1,0 m a zaškrtnout Respect System Units in File
+System Unit Setup -> 1 Unit = 1,0 m a zaÅ¡krtnout Respect System Units in File
 \see 
-\param file_name úplná cesta k OBJ souboru vèetnì pøípony.
-\param surfaces pole ploch, do kterého se budou ukládat naètené plochy.
-\param materials pole materiálù, do kterého se budou ukládat naètené materiály.
+\param file_name ÃºplnÃ¡ cesta k OBJ souboru vÄetnÄ› pÅ™Ã­pony.
+\param surfaces pole ploch, do kterÃ©ho se budou uklÃ¡dat naÄtenÃ© plochy.
+\param materials pole materiÃ¡lÅ¯, do kterÃ©ho se budou uklÃ¡dat naÄtenÃ© materiÃ¡ly.
 \param flip_yz rotace kolem osy x o + 90st.
-\param default_color vıchozí barva vertexu.
+\param default_color vÃ½chozÃ­ barva vertexu.
 */
 int LoadOBJ( const char * file_name, std::vector<Surface *> & surfaces, std::vector<Material *> & materials,
 	const bool flip_yz = false, const Vector3 default_color = Vector3( 0.5f, 0.5f, 0.5f ) );

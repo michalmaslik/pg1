@@ -1,20 +1,20 @@
-#ifndef VERTEX_H_
+Ôªø#ifndef VERTEX_H_
 #define VERTEX_H_
 
 #include "structs.h"
 #include "vector3.h"
 
 /*! \def NO_TEXTURE_COORDS
-\brief PoËet texturovacÌch sou¯adnic.
+\brief Poƒçet texturovac√≠ch sou≈ôadnic.
 */
 #define NO_TEXTURE_COORDS 1
 
 //class Surface;
 
 /*! \struct Vertex
-\brief Struktura popisujÌcÌ vöechny atributy vertexu.
+\brief Struktura popisuj√≠c√≠ v≈°echny atributy vertexu.
 
-\author Tom·ö Fabi·n
+\author Tom√°≈° Fabi√°n
 \version 1.0
 \date 2013
 */
@@ -22,27 +22,27 @@ struct /*ALIGN*/ Vertex
 {
 public:
 	Vector3 position; /*!< Pozice vertexu. */
-	Vector3 normal; /*!< Norm·la vertexu. */
+	Vector3 normal; /*!< Norm√°la vertexu. */
 	Vector3 color; /*!< RGB barva vertexu <0, 1>^3. */
-	Coord2f texture_coords[NO_TEXTURE_COORDS]; /*!< TexturovacÌ sou¯adnice. */
-	Vector3 tangent; /*!< PrvnÌ osa sou¯adnÈho systÈmu tangenta-bitangenta-norm·la. */
+	Coord2f texture_coords[NO_TEXTURE_COORDS]; /*!< Texturovac√≠ sou≈ôadnice. */
+	Vector3 tangent; /*!< Prvn√≠ osa sou≈ôadn√©ho syst√©mu tangenta-bitangenta-norm√°la. */
 
-	//char pad[8]; // doplnÏnÌ na 64 byt˘, mÏlo by to mÌt alespoÚ 4 byty, aby se sem veöel 32-bitov˝ ukazatel
+	//char pad[8]; // doplnƒõn√≠ na 64 byt≈Ø, mƒõlo by to m√≠t alespo≈à 4 byty, aby se sem ve≈°el 32-bitov√Ω ukazatel
 
-	//! V˝chozÌ konstruktor.
+	//! V√Ωchoz√≠ konstruktor.
 	/*!
-	Inicializuje vöechny sloûky vertexu na hodnotu nula.
+	Inicializuje v≈°echny slo≈æky vertexu na hodnotu nula.
 	*/
 	Vertex() { }
 
-	//! Obecn˝ konstruktor.
+	//! Obecn√Ω konstruktor.
 	/*!
-	Inicializuje vertex podle zadan˝ch hodnot parametr˘.
+	Inicializuje vertex podle zadan√Ωch hodnot parametr≈Ø.
 
 	\param position pozice vertexu.
-	\param normal norm·la vertexu.
+	\param normal norm√°la vertexu.
 	\param color barva vertexu.
-	\param texture_coords nepovinn˝ ukazatel na pole texturovacÌch sou¯adnic.
+	\param texture_coords nepovinn√Ω ukazatel na pole texturovac√≠ch sou≈ôadnic.
 	*/
 	Vertex( const Vector3 position, const Vector3 normal, Vector3 color, Coord2f * texture_coords = NULL );
 

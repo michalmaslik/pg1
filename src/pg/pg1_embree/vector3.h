@@ -1,65 +1,65 @@
-#ifndef VECTOR3_H_
+ï»¿#ifndef VECTOR3_H_
 #define VECTOR3_H_
 
 #include "structs.h"
 
 /*! \struct Vector3
-\brief Trojrozmìrnı (3D) vektor.
+\brief TrojrozmÄ›rnÃ½ (3D) vektor.
 
-Implementace tøíslokového reálného vektoru podporující základní
-matematické operace.
+Implementace tÅ™Ã­sloÅ¾kovÃ©ho reÃ¡lnÃ©ho vektoru podporujÃ­cÃ­ zÃ¡kladnÃ­
+matematickÃ© operace.
 
 \note
-Vektor se povauje za sloupcovı, pøestoe je v komentáøích pro jednoduchost
-uvádìn jako øádkovı.
+Vektor se povaÅ¾uje za sloupcovÃ½, pÅ™estoÅ¾e je v komentÃ¡Å™Ã­ch pro jednoduchost
+uvÃ¡dÄ›n jako Å™Ã¡dkovÃ½.
 
 \code{.cpp}
 Vector3 v = Vector3( 2.0f, 4.5f, 7.8f );
 v.Normalize();
 \endcode
 
-\author Tomáš Fabián
+\author TomÃ¡Å¡ FabiÃ¡n
 \version 0.95
 \date 2007-2015
 */
 struct /*ALIGN*/ Vector3
 {
 public:
-	union	// anonymní unie
+	union	// anonymnÃ­ unie
 	{
 		struct
 		{
-			float x; /*!< První sloka vektoru. */
-			float y; /*!< Druhá sloka vektoru. */
-			float z; /*!< Tøetí sloka vektoru. */
+			float x; /*!< PrvnÃ­ sloÅ¾ka vektoru. */
+			float y; /*!< DruhÃ¡ sloÅ¾ka vektoru. */
+			float z; /*!< TÅ™etÃ­ sloÅ¾ka vektoru. */
 		};
 
-		float data[3]; /*!< Pole sloek vektoru. */
+		float data[3]; /*!< Pole sloÅ¾ek vektoru. */
 	};
 
-	//! Vıchozí konstruktor.
+	//! VÃ½chozÃ­ konstruktor.
 	/*!
-	Inicializuje všechny sloky vektoru na hodnotu nula,
+	Inicializuje vÅ¡echny sloÅ¾ky vektoru na hodnotu nula,
 	\f$\mathbf{v}=\mathbf{0}\f$.
 	*/
 	Vector3() : x(0), y(0), z(0) {}
 
-	//! Obecnı konstruktor.
+	//! ObecnÃ½ konstruktor.
 	/*!
-	Inicializuje sloky vektoru podle zadanıch hodnot parametrù,
+	Inicializuje sloÅ¾ky vektoru podle zadanÃ½ch hodnot parametrÅ¯,
 	\f$\mathbf{v}=(x,y,z)\f$.
 
-	\param x první sloka vektoru.
-	\param y druhá sloka vektoru.
-	\param z tøetí sloka vektoru.
+	\param x prvnÃ­ sloÅ¾ka vektoru.
+	\param y druhÃ¡ sloÅ¾ka vektoru.
+	\param z tÅ™etÃ­ sloÅ¾ka vektoru.
 	*/
 	Vector3(const float x, const float y, const float z) : x(x), y(y), z(z) {}
 
 	//! Konstruktor z pole.
 	/*!
-	Inicializuje sloky vektoru podle zadanıch hodnot pole,
+	Inicializuje sloÅ¾ky vektoru podle zadanÃ½ch hodnot pole,
 
-	\param v ukazatel na první sloka vektoru.
+	\param v ukazatel na prvnÃ­ sloÅ¾ka vektoru.
 	*/
 	Vector3(const float* v);
 
@@ -69,7 +69,7 @@ public:
 	*/
 	float L2Norm() const;
 
-	//! Druhá mocnina L2-normy vektoru.
+	//! DruhÃ¡ mocnina L2-normy vektoru.
 	/*!
 	\return Hodnotu \f$\mathbf{||v||^2}=x^2+y^2+z^2\f$.
 	*/
@@ -77,11 +77,11 @@ public:
 
 	//! Normalizace vektoru.
 	/*!
-	Po provedení operace bude mít vektor jednotkovou délku.
+	Po provedenÃ­ operace bude mÃ­t vektor jednotkovou dÃ©lku.
 	*/
 	void Normalize();
 
-	//! Vektorovı souèin.
+	//! VektorovÃ½ souÄin.
 	/*!
 	\param v vektor \f$\mathbf{v}\f$.
 
@@ -95,17 +95,17 @@ public:
 
 	Vector3 Max(const float a = 0) const;
 
-	//! Skalární souèin.
+	//! SkalÃ¡rnÃ­ souÄin.
 	/*!
 	\return Hodnotu \f$\mathbf{u}_x \mathbf{v}_x + \mathbf{u}_y \mathbf{v}_y + \mathbf{u}_z \mathbf{v}_z)\f$.
 	*/
 	float DotProduct(const Vector3& v) const;
 
-	//! Index nejvìtší sloky vektoru.
+	//! Index nejvÄ›tÅ¡Ã­ sloÅ¾ky vektoru.
 	/*!
-	\param absolute_value index bude urèen podle absolutní hodnoty sloky
+	\param absolute_value index bude urÄen podle absolutnÃ­ hodnoty sloÅ¾ky
 
-	\return Index nejvìtší sloky vektoru.
+	\return Index nejvÄ›tÅ¡Ã­ sloÅ¾ky vektoru.
 	*/
 	char LargestComponent(const bool absolute_value = false) const;
 
@@ -120,7 +120,7 @@ public:
 	Color4f ToColor4fCompressed();
 
 
-	// --- operátory ------
+	// --- operÃ¡tory ------
 
 	friend Vector3 operator-(const Vector3& v);
 

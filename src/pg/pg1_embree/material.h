@@ -1,16 +1,16 @@
-#ifndef MATERIAL_H_
+ï»¿#ifndef MATERIAL_H_
 #define MATERIAL_H_
 
 #include "vector3.h"
 #include "texture.h"
 
 /*! \def NO_TEXTURES
-\brief Maximální poèet textur pøiøazenıch materiálu.
+\brief MaximÃ¡lnÃ­ poÄet textur pÅ™iÅ™azenÃ½ch materiÃ¡lu.
 */
 #define NO_TEXTURES 4
 
 /*! \def IOR_AIR
-\brief Index lomu vzduchu za normálního tlaku.
+\brief Index lomu vzduchu za normÃ¡lnÃ­ho tlaku.
 */
 #define IOR_AIR 1.000293f
 
@@ -27,32 +27,32 @@
 /*! \class Material
 \brief A simple material.
 
-\author Tomáš Fabián
+\author TomÃ¡Å¡ FabiÃ¡n
 \version 0.9
 \date 2011-2018
 */
 class Material
 {
 public:
-	//! Implicitní konstruktor.
+	//! ImplicitnÃ­ konstruktor.
 	/*!
-	Inicializuje všechny sloky materiálu na vıchozí matnì šedı materiál.
+	Inicializuje vÅ¡echny sloÅ¾ky materiÃ¡lu na vÃ½chozÃ­ matnÄ› Å¡edÃ½ materiÃ¡l.
 	*/
 	Material();
 
-	//! Specializovanı konstruktor.
+	//! SpecializovanÃ½ konstruktor.
 	/*!
-	Inicializuje materiál podle zadanıch hodnot parametrù.
+	Inicializuje materiÃ¡l podle zadanÃ½ch hodnot parametrÅ¯.
 
-	\param name název materiálu.
-	\param ambient barva prostøedí.
+	\param name nÃ¡zev materiÃ¡lu.
+	\param ambient barva prostÅ™edÃ­.
 	\param diffuse barva rozptylu.
 	\param specular barva odrazu.
 	\param emission  barva emise.
 	\param shininess lesklost.
 	\param ior index lomu.
-	\param textures pole ukazatelù na textury.
-	\param no_textures délka pole \a textures. Maximálnì \a NO_TEXTURES - 1.
+	\param textures pole ukazatelÅ¯ na textury.
+	\param no_textures dÃ©lka pole \a textures. MaximÃ¡lnÄ› \a NO_TEXTURES - 1.
 	*/
 	Material(std::string& name, const Vector3& ambient, const Vector3& diffuse,
 		const Vector3& specular, const Vector3& emission, const float reflectivity,
@@ -61,46 +61,46 @@ public:
 
 	//! Destruktor.
 	/*!
-	Uvolní všechny alokované zdroje.
+	UvolnÃ­ vÅ¡echny alokovanÃ© zdroje.
 	*/
 	~Material();
 
 	//void Print();
 
-	//! Nastaví název materiálu.
+	//! NastavÃ­ nÃ¡zev materiÃ¡lu.
 	/*!
-	\param name název materiálu.
+	\param name nÃ¡zev materiÃ¡lu.
 	*/
 	void set_name(const char* name);
 
-	//! Vrátí název materiálu.
+	//! VrÃ¡tÃ­ nÃ¡zev materiÃ¡lu.
 	/*!
-	\return Název materiálu.
+	\return NÃ¡zev materiÃ¡lu.
 	*/
 	std::string get_name() const;
 
-	//! Nastaví texturu.
+	//! NastavÃ­ texturu.
 	/*!
-	\param slot èíslo slotu, do kterého bude textura pøiøazena. Maximálnì \a NO_TEXTURES - 1.
+	\param slot ÄÃ­slo slotu, do kterÃ©ho bude textura pÅ™iÅ™azena. MaximÃ¡lnÄ› \a NO_TEXTURES - 1.
 	\param texture ukazatel na texturu.
 	*/
 	void set_texture(const int slot, Texture* texture);
 
-	//! Vrátí texturu.
+	//! VrÃ¡tÃ­ texturu.
 	/*!
-	\param slot èíslo slotu textury. Maximálnì \a NO_TEXTURES - 1.
+	\param slot ÄÃ­slo slotu textury. MaximÃ¡lnÄ› \a NO_TEXTURES - 1.
 	\return Ukazatel na zvolenou texturu.
 	*/
 	Texture* get_texture(const int slot) const;
 
 public:
-	Vector3 ambient; /*!< RGB barva prostøedí \f$\left<0, 1\right>^3\f$. */
+	Vector3 ambient; /*!< RGB barva prostÅ™edÃ­ \f$\left<0, 1\right>^3\f$. */
 	Vector3 diffuse; /*!< RGB barva rozptylu \f$\left<0, 1\right>^3\f$. */
 	Vector3 specular; /*!< RGB barva odrazu \f$\left<0, 1\right>^3\f$. */
 
 	Vector3 emission; /*!< RGB barva emise \f$\left<0, 1\right>^3\f$. */
 
-	float shininess; /*!< Koeficient lesklosti (\f$\ge 0\f$). Èím je hodnota vìtší, tím se jeví povrch lesklejší. */
+	float shininess; /*!< Koeficient lesklosti (\f$\ge 0\f$). ÄŒÃ­m je hodnota vÄ›tÅ¡Ã­, tÃ­m se jevÃ­ povrch lesklejÅ¡Ã­. */
 
 	float reflectivity; /*!< Koeficient odrazivosti. */
 	float ior; /*!< Index lomu. */
@@ -108,13 +108,13 @@ public:
 	Vector3 attenuation; /*!<  */
 	int shader; /*!<  */
 
-	static const char kDiffuseMapSlot; /*!< Èíslo slotu difuzní textury. */
-	static const char kSpecularMapSlot; /*!< Èíslo slotu spekulární textury. */
-	static const char kNormalMapSlot; /*!< Èíslo slotu normálové textury. */
-	static const char kOpacityMapSlot; /*!< Èíslo slotu transparentní textury. */
+	static const char kDiffuseMapSlot; /*!< ÄŒÃ­slo slotu difuznÃ­ textury. */
+	static const char kSpecularMapSlot; /*!< ÄŒÃ­slo slotu spekulÃ¡rnÃ­ textury. */
+	static const char kNormalMapSlot; /*!< ÄŒÃ­slo slotu normÃ¡lovÃ© textury. */
+	static const char kOpacityMapSlot; /*!< ÄŒÃ­slo slotu transparentnÃ­ textury. */
 
 private:
-	Texture* textures_[NO_TEXTURES]; /*!< Pole ukazatelù na textury. */
+	Texture* textures_[NO_TEXTURES]; /*!< Pole ukazatelÅ¯ na textury. */
 	/*
 	slot 0 - diffuse map + alpha
 	slot 1 - specular map + opaque alpha
@@ -122,7 +122,7 @@ private:
 	slot 3 - transparency map
 	*/
 
-	std::string name_; /*!< Název materiálu. */
+	std::string name_; /*!< NÃ¡zev materiÃ¡lu. */
 };
 
 #endif

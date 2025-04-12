@@ -1,27 +1,27 @@
-#ifndef MATRIX_3X3_H_
+ï»¿#ifndef MATRIX_3X3_H_
 #define MATRIX_3X3_H_
 
 #include "vector3.h"
 
 /*! \class Matrix3x3
-\brief Reálná matice 3x3 uspoøádaná po øádcích.
+\brief ReÃ¡lnÃ¡ matice 3x3 uspoÅ™Ã¡danÃ¡ po Å™Ã¡dcÃ­ch.
 
-\author Tomáš Fabián
+\author TomÃ¡Å¡ FabiÃ¡n
 \version 1.1
 \date 2018
 */
 class Matrix3x3
 {
 public:
-	//! Vıchozí konstruktor.
+	//! VÃ½chozÃ­ konstruktor.
 	/*!
 	Inicializace na matici identity.
 	*/
 	Matrix3x3();
 
-	//! Vıchozí konstruktor.
+	//! VÃ½chozÃ­ konstruktor.
 	/*!
-	Inicializace matice zadanımi hodnotami. První index oznaèuje øádek, druhı index patøí sloupci.
+	Inicializace matice zadanÃ½mi hodnotami. PrvnÃ­ index oznaÄuje Å™Ã¡dek, druhÃ½ index patÅ™Ã­ sloupci.
 	*/
 	Matrix3x3(const float m00, const float m01, const float m02,
 		const float m10, const float m11, const float m12,
@@ -35,23 +35,23 @@ public:
 
 	//! Transpozice matice.
 	/*!
-	Provede traspozici matice vzájemnou vımìnou øádkù a sloupcù.
+	Provede traspozici matice vzÃ¡jemnou vÃ½mÄ›nou Å™Ã¡dkÅ¯ a sloupcÅ¯.
 	*/
 	Matrix3x3 Transpose() const;
 
-	//! Nastaví zadanı prvek matice na novou hodnotu.
+	//! NastavÃ­ zadanÃ½ prvek matice na novou hodnotu.
 	/*!
-	\param row øádek matice.
+	\param row Å™Ã¡dek matice.
 	\param column sloupec matice.
-	\param value nová hodnota prvku matice.
+	\param value novÃ¡ hodnota prvku matice.
 	*/
 	void set(const int row, const int column, const float value);
 
-	//! Vrátí zadanı prvek matice.
+	//! VrÃ¡tÃ­ zadanÃ½ prvek matice.
 	/*!
-	\param row øádek matice.
+	\param row Å™Ã¡dek matice.
 	\param column sloupec matice.
-	\return Poadovanı prvek matice.
+	\return PoÅ¾adovanÃ½ prvek matice.
 	*/
 	float get(const int row, const int column) const;
 
