@@ -4,6 +4,7 @@
 #include "tutorials.h"
 #include "utils.h"
 #include <iostream>
+#include "smooth_union.h"
 
 
 Raytracer::Raytracer(const int width, const int height,
@@ -48,6 +49,18 @@ void Raytracer::LoadScene(const std::string file_name, const char* cube_map_file
 	cubemap_ = new CubeMap(cube_map_file_names);
 
 	const int no_surfaces = LoadOBJ(file_name.c_str(), surfaces_, materials_);
+
+	// Pridáme testovaciu guľu
+	//Sphere* test_sphere = new Sphere(Vector3(0.0f, 0.0f, 0.0f), 0.5f);
+	//volumetric_objects_.push_back(test_sphere);
+
+	// Vytvoríme dve gule
+	Sphere* sphere1 = new Sphere(Vector3(0.0f, 0.0f, 0.0f), 0.5f);
+	Sphere* sphere2 = new Sphere(Vector3(0.5f, 0.0f, 0.0f), 0.1f);
+	
+	// Vytvoríme smooth union z týchto dvoch gúľ
+	SmoothUnion* smooth_union = new SmoothUnion(sphere1, sphere2, 0.5f);
+	volumetric_objects_.push_back(smooth_union);
 
 	// surfaces loop
 	for (auto surface : surfaces_)
@@ -183,82 +196,126 @@ bool Raytracer::IsHitPointVisible(const Vector3 hitPoint, const Vector3 lightPoi
 	}
 }
 
+Vector3 Raytracer::TraceSDFRay(RTCRay ray, const int depth, const int max_depth) {
+    if (depth >= max_depth) {
+        return Vector3(0.0f, 0.0f, 0.0f);
+    }
+
+    const float step_size = 0.01f;
+    const float max_distance = 100.0f;
+    const int max_steps = 1000;
+    
+    float distance = 0.0f;
+    Vector3 position(ray.org_x, ray.org_y, ray.org_z);
+    Vector3 direction(ray.dir_x, ray.dir_y, ray.dir_z);
+    
+    for (int i = 0; i < max_steps; ++i) {
+        float min_dist = FLT_MAX;
+        
+        // Prechádzame všetkými volumetrickými objektmi
+        for (const auto& shape : volumetric_objects_) {
+            float dist = shape->SDF(position);
+            min_dist = min(min_dist, dist);
+        }
+        
+        if (min_dist < 0.001f) {
+            // Priesečník s SDF guľou
+            return Vector3(1.0f, 1.0f, 1.0f); // Biela farba pre guľu
+        }
+        
+        if (distance > max_distance) {
+            break;
+        }
+        
+        distance += min_dist;
+        position = position + direction * min_dist;
+    }
+    
+    // Ak nenájdeme priesečník, vrátime farbu z cubemap
+    Vector3 direction_vector(ray.dir_x, ray.dir_y, ray.dir_z);
+    direction_vector.Normalize();
+    Color3f background_color = cubemap_->get_texel(direction_vector);
+    return Vector3(background_color.r, background_color.g, background_color.b);
+}
+
 Vector3 Raytracer::TraceRay(RTCRay ray, const float n_1, const int depth, const int max_depth) {
-	if (depth >= max_depth) {
-		return Vector3{ 1.0f, 0.0f, 0.0f };
-	}
+    if (sdf_mode) {
+        return TraceSDFRay(ray, depth, max_depth);
+    }
 
-	// setup a hit
-	RTCHit hit;
-	hit.geomID = RTC_INVALID_GEOMETRY_ID;
-	hit.primID = RTC_INVALID_GEOMETRY_ID;
-	hit.Ng_x = 0.0f; // geometry normal
-	hit.Ng_y = 0.0f;
-	hit.Ng_z = 0.0f;
+    if (depth >= max_depth) {
+        return Vector3(0.0f, 0.0f, 0.0f);
+    }
 
-	// merge ray and hit structures
-	RTCRayHit ray_hit;
-	ray_hit.ray = ray;
-	ray_hit.hit = hit;
+    // setup a hit
+    RTCHit hit;
+    hit.geomID = RTC_INVALID_GEOMETRY_ID;
+    hit.primID = RTC_INVALID_GEOMETRY_ID;
+    hit.Ng_x = 0.0f; // geometry normal
+    hit.Ng_y = 0.0f;
+    hit.Ng_z = 0.0f;
 
-	// intersect ray with the scene
-	RTCIntersectContext context;
-	rtcInitIntersectContext(&context);
-	rtcIntersect1(scene_, &context, &ray_hit);
+    // merge ray and hit structures
+    RTCRayHit ray_hit;
+    ray_hit.ray = ray;
+    ray_hit.hit = hit;
 
-	Vector3 direction_vector{ ray_hit.ray.dir_x, ray_hit.ray.dir_y, ray_hit.ray.dir_z };
+    // intersect ray with the scene
+    RTCIntersectContext context;
+    rtcInitIntersectContext(&context);
+    rtcIntersect1(scene_, &context, &ray_hit);
 
-	if (ray_hit.hit.geomID == RTC_INVALID_GEOMETRY_ID)
-	{
-		Color3f background_color = cubemap_->get_texel(direction_vector);
-		return Vector3{ background_color.r, background_color.g, background_color.b };
-	}
+    Vector3 direction_vector{ ray_hit.ray.dir_x, ray_hit.ray.dir_y, ray_hit.ray.dir_z };
 
-	const Vector3 origin_point{ ray_hit.ray.org_x, ray_hit.ray.org_y, ray_hit.ray.org_z };
-	const Vector3 hit_point{
-		ray_hit.ray.org_x + ray_hit.ray.dir_x * ray_hit.ray.tfar,
-		ray_hit.ray.org_y + ray_hit.ray.dir_y * ray_hit.ray.tfar,
-		ray_hit.ray.org_z + ray_hit.ray.dir_z * ray_hit.ray.tfar
-	};
+    if (ray_hit.hit.geomID == RTC_INVALID_GEOMETRY_ID)
+    {
+        Color3f background_color = cubemap_->get_texel(direction_vector);
+        return Vector3{ background_color.r, background_color.g, background_color.b };
+    }
 
-	// we hit something
-	RTCGeometry geometry = rtcGetGeometry(scene_, ray_hit.hit.geomID);
+    const Vector3 origin_point{ ray_hit.ray.org_x, ray_hit.ray.org_y, ray_hit.ray.org_z };
+    const Vector3 hit_point{
+        ray_hit.ray.org_x + ray_hit.ray.dir_x * ray_hit.ray.tfar,
+        ray_hit.ray.org_y + ray_hit.ray.dir_y * ray_hit.ray.tfar,
+        ray_hit.ray.org_z + ray_hit.ray.dir_z * ray_hit.ray.tfar
+    };
 
-	Normal3f normal;
-	// get interpolated normal
-	rtcInterpolate0(geometry, ray_hit.hit.primID, ray_hit.hit.u, ray_hit.hit.v,
-		RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE, 0, &normal.x, 3);
-	Vector3 normal_vector{ normal.x, normal.y, normal.z };
+    // we hit something
+    RTCGeometry geometry = rtcGetGeometry(scene_, ray_hit.hit.geomID);
 
-	if (normal_vector.DotProduct(direction_vector) > 0.0f) {
-		normal_vector *= -1.0f;
-	}
+    Normal3f normal;
+    // get interpolated normal
+    rtcInterpolate0(geometry, ray_hit.hit.primID, ray_hit.hit.u, ray_hit.hit.v,
+        RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE, 0, &normal.x, 3);
+    Vector3 normal_vector{ normal.x, normal.y, normal.z };
 
-	// and texture coordinates
-	Coord2f tex_coord;
-	rtcInterpolate0(geometry, ray_hit.hit.primID, ray_hit.hit.u, ray_hit.hit.v,
-		RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE, 1, &tex_coord.u, 2);
+    if (normal_vector.DotProduct(direction_vector) > 0.0f) {
+        normal_vector *= -1.0f;
+    }
 
-	Material* material = (Material*)rtcGetGeometryUserData(geometry);
-	assert(material);
+    // and texture coordinates
+    Coord2f tex_coord;
+    rtcInterpolate0(geometry, ray_hit.hit.primID, ray_hit.hit.u, ray_hit.hit.v,
+        RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE, 1, &tex_coord.u, 2);
 
-	if (normal_shader) {
-		return normal_vector;
-	}
-	else if (lambert_shader) {
-		return lambertShader(material, tex_coord, hit_point, normal_vector);
-	}
-	else {
-		if (material->shader == 3) {
-			return phongShader(material, tex_coord, hit_point, normal_vector, direction_vector, depth);
-		}
-		else if (material->shader == 4) {
-			return transparentShader(ray, hit_point, normal_vector, direction_vector, material, n_1, depth);
-		}
-	}
+    Material* material = (Material*)rtcGetGeometryUserData(geometry);
+    assert(material);
 
-
-
+    if (normal_shader) {
+        return normal_vector;
+    }
+    else if (lambert_shader) {
+        return lambertShader(material, tex_coord, hit_point, normal_vector);
+    }
+    else {
+        if (material->shader == 3) {
+            return phongShader(material, tex_coord, hit_point, normal_vector, direction_vector, depth);
+        }
+        else if (material->shader == 4) {
+            return transparentShader(ray, hit_point, normal_vector, direction_vector, material, n_1, depth);
+        }
+    }
+    return normal_vector;
 }
 
 Vector3 Raytracer::lambertShader(const Material* material, const Coord2f tex_coord, const Vector3 hit_point, Vector3 normal_vector) {
@@ -372,6 +429,143 @@ Vector3 Raytracer::transparentShader(RTCRay ray, const Vector3 hit_point, Vector
 	return (refl * r + refr * (1.0 - r)) * t_b_l(n_1 == 1.0f ? 0.0f : euclid_distance(Vector3{ ray.org_x, ray.org_y, ray.org_z }, hit_point), material->attenuation);
 }
 
+Vector3 Raytracer::RayMarching(RTCRay ray, float& t) {
+	const float step_size = 0.01f;
+	const float max_distance = 100.0f;
+	const int max_steps = 1000;
+	
+	float distance = 0.0f;
+	Vector3 position(ray.org_x, ray.org_y, ray.org_z);
+	Vector3 direction(ray.dir_x, ray.dir_y, ray.dir_z);
+	
+	for (int i = 0; i < max_steps; ++i) {
+		float min_dist = FLT_MAX;
+		
+		// Prechádzame všetkými volumetrickými objektmi
+		for (const auto& shape : volumetric_objects_) {
+			float dist = shape->SDF(position);
+			min_dist = min(min_dist, dist);
+		}
+		
+		if (min_dist < 0.001f) {
+			t = distance;
+			return position;
+		}
+		
+		if (distance > max_distance) {
+			break;
+		}
+		
+		distance += min_dist;
+		position = position + direction * min_dist;
+	}
+	
+	t = FLT_MAX;
+	return Vector3(0.0f, 0.0f, 0.0f);
+}
+
+Vector3 Raytracer::SampleVolume(const Vector3& position) {
+	float min_dist = FLT_MAX;
+	Shape* closest_shape = nullptr;
+	
+	for (const auto& shape : volumetric_objects_) {
+		float dist = shape->SDF(position);
+		if (dist < min_dist) {
+			min_dist = dist;
+			closest_shape = shape;
+		}
+	}
+	
+	if (closest_shape) {
+		// Tu môžeme pridať vlastnú logiku pre vzorkovanie objemu
+		// Napríklad na základe vzdialenosti od stredu gule
+		return Vector3(1.0f, 1.0f, 1.0f); // Predvolená hodnota
+	}
+	
+	return Vector3(0.0f, 0.0f, 0.0f);
+}
+
+float Raytracer::HenyeyGreenstein(const Vector3& wi, const Vector3& wo, float g) {
+	float cos_theta = wi.DotProduct(wo);
+	float g2 = g * g;
+	return (1.0f - g2) / (4.0f * M_PI * pow(1.0f + g2 - 2.0f * g * cos_theta, 1.5f));
+}
+
+Vector3 Raytracer::ComputeTransmittance(const Vector3& start, const Vector3& end, float step_size) {
+	Vector3 transmittance(1.0f, 1.0f, 1.0f);
+	Vector3 direction = end - start;
+	direction.Normalize();
+	float distance = (end - start).L2Norm();
+	int steps = static_cast<int>(distance / step_size);
+	
+	for (int i = 0; i < steps; ++i) {
+		Vector3 position = start + direction * (i * step_size);
+		Vector3 density = SampleVolume(position);
+		
+		transmittance = transmittance * Vector3(
+			exp(-density.x * step_size),
+			exp(-density.y * step_size),
+			exp(-density.z * step_size)
+		);
+	}
+	
+	return transmittance;
+}
+
+Vector3 Raytracer::ComputeInScattering(const Vector3& start, const Vector3& end, float step_size, const Vector3& light_dir) {
+	Vector3 in_scattering(0.0f, 0.0f, 0.0f);
+	Vector3 direction = end - start;
+	direction.Normalize();
+	float distance = (end - start).L2Norm();
+	int steps = static_cast<int>(distance / step_size);
+	
+	for (int i = 0; i < steps; ++i) {
+		Vector3 position = start + direction * (i * step_size);
+		Vector3 density = SampleVolume(position);
+		
+		// Vypočítame transmittance pre aktuálny bod
+		Vector3 transmittance = ComputeTransmittance(position, end, step_size);
+		
+		// Pridáme príspevok k in-scattering
+		in_scattering = in_scattering + density * transmittance * step_size;
+	}
+	
+	return in_scattering;
+}
+
+Vector3 Raytracer::TraceVolumetricRay(RTCRay ray, const int depth, const int max_depth) {
+	if (depth >= max_depth) {
+		return Vector3(0.0f, 0.0f, 0.0f);
+	}
+	
+	float t;
+	Vector3 hit_point = RayMarching(ray, t);
+	
+	if (t == FLT_MAX) {
+		return Vector3(0.0f, 0.0f, 0.0f); // Žiadny priesečník
+	}
+	
+	// Vypočítame in-scattering
+	Vector3 light_dir = light_.GetOrigin() - hit_point;
+	light_dir.Normalize();
+	Vector3 in_scattering = ComputeInScattering(
+		Vector3(ray.org_x, ray.org_y, ray.org_z),
+		hit_point,
+		0.01f,
+		light_dir
+	);
+	
+	// Vypočítame transmittance
+	Vector3 transmittance = ComputeTransmittance(
+		Vector3(ray.org_x, ray.org_y, ray.org_z),
+		hit_point,
+		0.01f
+	);
+	
+	// Kombinujeme výsledky
+	return in_scattering + transmittance;
+}
+
 
 
 Color4f Raytracer::get_pixel(const int x, const int y, const float t)
@@ -414,18 +608,28 @@ int Raytracer::Ui()
 		normal_shader = true;
 		lambert_shader = false;
 		phong_shader = false;
+		sdf_mode = false;
 	}
 	ImGui::SameLine();
 	if (ImGui::RadioButton("Lambert", lambert_shader)) {
 		normal_shader = false;
 		lambert_shader = true;
 		phong_shader = false;
+		sdf_mode = false;
 	}
 	ImGui::SameLine();
 	if (ImGui::RadioButton("Phong/Whitted", phong_shader)) {
 		normal_shader = false;
 		lambert_shader = false;
 		phong_shader = true;
+		sdf_mode = false;
+	}
+	ImGui::SameLine();
+	if (ImGui::RadioButton("SDF", sdf_mode)) {
+		normal_shader = false;
+		lambert_shader = false;
+		phong_shader = false;
+		sdf_mode = true;
 	}
 
 	ImGui::Checkbox("Vsync", &vsync_);

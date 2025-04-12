@@ -108,6 +108,12 @@ public:
 	Vector3 attenuation; /*!<  */
 	int shader; /*!<  */
 
+	// Volumetric properties
+	float density; /*!< Hustota volumetrického materiálu */
+	Vector3 scattering; /*!< Koeficient rozptylu svetla */
+	Vector3 absorption; /*!< Koeficient absorpcie svetla */
+	float phase_g; /*!< Parameter Henyey-Greenstein fázy */
+
 	static const char kDiffuseMapSlot; /*!< Číslo slotu difuzní textury. */
 	static const char kSpecularMapSlot; /*!< Číslo slotu spekulární textury. */
 	static const char kNormalMapSlot; /*!< Číslo slotu normálové textury. */

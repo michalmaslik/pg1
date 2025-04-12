@@ -1,15 +1,21 @@
-#pragma once
+#ifndef RAYTRACER_H_
+#define RAYTRACER_H_
+
 #include "simpleguidx11.h"
 #include "surface.h"
 #include "camera.h"
 #include "light.h"
 #include "cubemap.h"
 #include "mymath.h"
+#include "material.h"
+#include "shape.h"
+#include "sphere.h"
+#include "smooth_union.h"
 
 /*! \class Raytracer
 \brief General ray tracer class.
 
-\author Tomáš Fabián
+\author Tom Fabin
 \version 0.1
 \date 2018
 */
@@ -46,6 +52,11 @@ public:
 	bool lambert_shader = false;
 	bool phong_shader = true;
 
+	// SDF rendering
+	bool sdf_mode = true;
+	std::vector<Shape*> volumetric_objects_;
+	Vector3 TraceSDFRay(RTCRay ray, const int depth, const int max_depth);
+
 private:
 	std::vector<Surface*> surfaces_;
 	std::vector<Material*> materials_;
@@ -55,4 +66,13 @@ private:
 	RTCScene scene_;
 	Camera camera_;
 	Light light_;
+
+	Vector3 TraceVolumetricRay(RTCRay ray, const int depth, const int max_depth);
+	Vector3 RayMarching(RTCRay ray, float& t);
+	Vector3 SampleVolume(const Vector3& position);
+	float HenyeyGreenstein(const Vector3& wi, const Vector3& wo, float g);
+	Vector3 ComputeTransmittance(const Vector3& start, const Vector3& end, float step_size);
+	Vector3 ComputeInScattering(const Vector3& start, const Vector3& end, float step_size, const Vector3& light_dir);
 };
+#endif
+
