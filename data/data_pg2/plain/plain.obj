@@ -1,0 +1,33 @@
+mtllib plain.mtl
+
+#
+# object Plain
+#
+
+v -1.0 0.0 -1.0
+v  1.0 0.0 -1.0
+v  1.0 0.0  1.0
+v -1.0 0.0  1.0
+# 4 vertices
+
+vn 0.0 -1.0 0.0
+# 1 vertex normals
+
+vt 0.0 0.0
+vt 1.0 0.0
+vt 1.0 1.0
+vt 0.0 1.0
+# 4 texture coords
+
+o Plain
+g Plain_w
+usemtl white_lambert
+s 1
+f 1/1/1 2/2/1 3/3/1
+
+g Plain_p
+usemtl purple_lambert
+s 1
+f 1/1/1 3/3/1 4/4/1
+
+# 0 polygons - 2 triangles
