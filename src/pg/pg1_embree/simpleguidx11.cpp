@@ -1,5 +1,12 @@
 #include "stdafx.h"
+#define _SILENCE_EXPERIMENTAL_FILESYSTEM_DEPRECATION_WARNING
 #include "simpleguidx11.h"
+#include <fstream>
+#include <sstream>
+#include <iomanip>
+#include <experimental/filesystem>
+#include <opencv2/opencv.hpp>
+
 
 SimpleGuiDX11::SimpleGuiDX11( const int width, const int height)
 {
@@ -69,6 +76,10 @@ int SimpleGuiDX11::Cleanup()
 	DestroyWindow( hwnd_ );
 	UnregisterClass( _T( "ImGui Example" ), wc_.hInstance );
 
+	// Vytvoríme video z uložených snímkov
+	std::string ffmpeg_cmd = "ffmpeg -framerate 60 -i frames/frame_%06d.ppm -c:v libx264 -crf 0 -preset veryslow -pix_fmt yuv420p frames/output.mp4";
+	system(ffmpeg_cmd.c_str());
+
 	return 0;
 }
 
@@ -78,36 +89,37 @@ int SimpleGuiDX11::Ui()
 	return 0;
 }
 
-Color4f SimpleGuiDX11::get_pixel( const int x, const int y, const float t )
+Color4f SimpleGuiDX11::GetPixel( const int x, const int y, const float t )
 {
 	return Color4f{ 1.0f, 0.0f, 1.0f, 1.0f };
 }
 
 void SimpleGuiDX11::Producer()
 {
-	float * local_data = new float[width_*height_ * 4];
+	float* local_data = new float[width_ * height_ * 4];
 
 	float t = 0.0f; // time
 	auto t0 = std::chrono::high_resolution_clock::now();
 
 	// refinenment loop
-	//for ( float t = 0.0f; t < 1e+3 && !finish_request_.load( std::memory_order_acquire ); t += float( 1e-1 ) )
-	while ( !finish_request_.load( std::memory_order_acquire ) )
+	for (float t = 0.0f; t < 1e+3 && !finish_request_.load(std::memory_order_acquire); t += float(1e-1))
+	while (!finish_request_.load(std::memory_order_acquire))
 	{
 		auto t1 = std::chrono::high_resolution_clock::now();
 		std::chrono::duration<float> dt = t1 - t0;
 		t += dt.count();
 		t0 = t1;
 
+		MoveCamera();
+
 		// compute rendering
-		//std::this_thread::sleep_for( std::chrono::milliseconds( 50 ) );
-//#pragma omp parallel for
-		for ( int y = 0; y < height_; ++y )
-		{		
-			for ( int x = 0; x < width_; ++x )
-			{				
-				const Color4f pixel = get_pixel( x, y, t );
-				const int offset = ( y * width_ + x ) * 4;
+		#pragma omp parallel for
+		for (int y = 0; y < height_; ++y)
+		{
+			for (int x = 0; x < width_; ++x)
+			{
+				const Color4f pixel = GetPixel(x, y, t);
+				const int offset = (y * width_ + x) * 4;
 
 				local_data[offset] = pixel.r;
 				local_data[offset + 1] = pixel.g;
@@ -119,9 +131,41 @@ void SimpleGuiDX11::Producer()
 
 		// write rendering results
 		{
-			std::lock_guard<std::mutex> lock( tex_data_lock_ );
-			memcpy( tex_data_, local_data, width_ * height_ * 4 * sizeof( float ) );			
+			std::lock_guard<std::mutex> lock(tex_data_lock_);
+			memcpy(tex_data_, local_data, width_ * height_ * 4 * sizeof(float));
 		} // lock release
+
+		// Uložíme snímok
+		{
+			// Vytvoríme adresár pre snímky ak neexistuje
+			std::experimental::filesystem::create_directory("frames");
+
+			// Vytvoríme názov súboru s leading zeros
+			std::stringstream filename;
+			filename << "frames/frame_" << std::setw(6) << std::setfill('0') << frameCount_ << ".ppm";
+
+			// Otvoríme súbor pre zápis
+			std::ofstream file(filename.str(), std::ios::binary);
+			if (file.is_open()) {
+				// Zapíšeme PPM hlavičku
+				file << "P6\n" << width_ << " " << height_ << "\n255\n";
+
+				// Prejdeme všetky pixely a zapíšeme ich
+				for (int y = 0; y < height_; ++y) {
+					for (int x = 0; x < width_; ++x) {
+						const int offset = (y * width_ + x) * 4;
+						// Konvertujeme na 8-bit hodnoty a zapíšeme
+						unsigned char r = static_cast<unsigned char>(local_data[offset] * 255.0f);
+						unsigned char g = static_cast<unsigned char>(local_data[offset + 1] * 255.0f);
+						unsigned char b = static_cast<unsigned char>(local_data[offset + 2] * 255.0f);
+						file.write(reinterpret_cast<const char*>(&r), 1);
+						file.write(reinterpret_cast<const char*>(&g), 1);
+						file.write(reinterpret_cast<const char*>(&b), 1);
+					}
+				}
+			}
+			frameCount_++;  // inkrementujeme počet snímkov
+		}
 	}
 
 	delete[] local_data;

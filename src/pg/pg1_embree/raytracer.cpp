@@ -5,30 +5,49 @@
 #include "utils.h"
 #include <iostream>
 #include "smooth_union.h"
+#include <opencv2/opencv.hpp>
 
-
-Raytracer::Raytracer(const int width, const int height,
-	const float fov_y, const Vector3 view_from, const Vector3 view_at, const Vector3 light_org,
+RayTracer::RayTracer(const int width, const int height,
+	const float fovY, const Vector3& viewFrom, const Vector3& viewAt, const Vector3& lightOrigin,
 	const char* config) : SimpleGuiDX11(width, height)
 {
 	InitDeviceAndScene(config);
 
-	camera_ = Camera(width, height, fov_y, view_from, view_at);
-	light_ = Light(light_org);
+	camera_ = Camera(width, height, fovY, viewFrom, viewAt);
+	light_ = Light(lightOrigin);
 }
 
-Raytracer::~Raytracer()
+RayTracer::~RayTracer()
 {
-	ReleaseDeviceAndScene();
+	for (auto shape : volumetricShapes_) {
+		delete shape;
+	}
+	volumetricShapes_.clear();
+
+	for (auto surface : surfaces_) {
+		delete surface;
+	}
+	surfaces_.clear();
+
+	for (auto material : materials_) {
+		delete material;
+	}
+	materials_.clear();
+
+	delete cubemap_;
+	cubemap_ = nullptr;
+
+	rtcReleaseScene(scene_);
+	rtcReleaseDevice(device_);
 }
 
-int Raytracer::InitDeviceAndScene(const char* config)
+int RayTracer::InitDeviceAndScene(const char* config)
 {
 	device_ = rtcNewDevice(config);
 	error_handler(nullptr, rtcGetDeviceError(device_), "Unable to create a new device.\n");
 	rtcSetDeviceErrorFunction(device_, error_handler, nullptr);
 
-	ssize_t triangle_supported = rtcGetDeviceProperty(device_, RTC_DEVICE_PROPERTY_TRIANGLE_GEOMETRY_SUPPORTED);
+	ssize_t triangleSupported = rtcGetDeviceProperty(device_, RTC_DEVICE_PROPERTY_TRIANGLE_GEOMETRY_SUPPORTED);
 
 	// create a new scene bound to the specified device
 	scene_ = rtcNewScene(device_);
@@ -36,7 +55,7 @@ int Raytracer::InitDeviceAndScene(const char* config)
 	return S_OK;
 }
 
-int Raytracer::ReleaseDeviceAndScene()
+int RayTracer::ReleaseDeviceAndScene()
 {
 	rtcReleaseScene(scene_);
 	rtcReleaseDevice(device_);
@@ -44,25 +63,10 @@ int Raytracer::ReleaseDeviceAndScene()
 	return S_OK;
 }
 
-void Raytracer::LoadScene(const std::string file_name, const char* cube_map_file_names[6])
+void RayTracer::LoadModel(const std::string& fileName, const Transform& transform)
 {
-	cubemap_ = new CubeMap(cube_map_file_names);
+	const int noSurfaces = LoadOBJ(fileName.c_str(), surfaces_, materials_);
 
-	const int no_surfaces = LoadOBJ(file_name.c_str(), surfaces_, materials_);
-
-	// Pridáme testovaciu guľu
-	//Sphere* test_sphere = new Sphere(Vector3(0.0f, 0.0f, 0.0f), 0.5f);
-	//volumetric_objects_.push_back(test_sphere);
-
-	// Vytvoríme dve gule
-	Sphere* sphere1 = new Sphere(Vector3(0.0f, 0.0f, 0.0f), 0.5f);
-	Sphere* sphere2 = new Sphere(Vector3(0.5f, 0.0f, 0.0f), 0.1f);
-	
-	// Vytvoríme smooth union z týchto dvoch gúľ
-	SmoothUnion* smooth_union = new SmoothUnion(sphere1, sphere2, 0.5f);
-	volumetric_objects_.push_back(smooth_union);
-
-	// surfaces loop
 	for (auto surface : surfaces_)
 	{
 		RTCGeometry mesh = rtcNewGeometry(device_, RTC_GEOMETRY_TYPE_TRIANGLE);
@@ -83,7 +87,7 @@ void Raytracer::LoadScene(const std::string file_name, const char* cube_map_file
 			mesh, RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE, 0, RTC_FORMAT_FLOAT3,
 			sizeof(Normal3f), 3 * surface->no_triangles());
 
-		Coord2f* tex_coords = (Coord2f*)rtcSetNewGeometryBuffer(
+		Coord2f* texCoords = (Coord2f*)rtcSetNewGeometryBuffer(
 			mesh, RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE, 1, RTC_FORMAT_FLOAT2,
 			sizeof(Coord2f), 3 * surface->no_triangles());
 
@@ -97,16 +101,26 @@ void Raytracer::LoadScene(const std::string file_name, const char* cube_map_file
 			{
 				const Vertex& vertex = triangle.vertex(j);
 
-				vertices[k].x = vertex.position.x;
-				vertices[k].y = vertex.position.y;
-				vertices[k].z = vertex.position.z;
+				// Apply translation and scale
+				vertices[k].x = vertex.position.x * transform.scale.x + transform.position.x;
+				vertices[k].y = vertex.position.y * transform.scale.y + transform.position.y;
+				vertices[k].z = vertex.position.z * transform.scale.z + transform.position.z;
 
-				normals[k].x = vertex.normal.x;
-				normals[k].y = vertex.normal.y;
-				normals[k].z = vertex.normal.z;
+				// Normals don't need translation, just scale
+				normals[k].x = vertex.normal.x * transform.scale.x;
+				normals[k].y = vertex.normal.y * transform.scale.y;
+				normals[k].z = vertex.normal.z * transform.scale.z;
 
-				tex_coords[k].u = vertex.texture_coords[0].u;
-				tex_coords[k].v = vertex.texture_coords[0].v;
+				// Normalize the normal
+				float length = sqrt(normals[k].x * normals[k].x + normals[k].y * normals[k].y + normals[k].z * normals[k].z);
+				if (length > 0.0f) {
+					normals[k].x /= length;
+					normals[k].y /= length;
+					normals[k].z /= length;
+				}
+
+				texCoords[k].u = vertex.texture_coords[0].u;
+				texCoords[k].v = vertex.texture_coords[0].v;
 			} // end of vertices loop
 
 			triangles[i].v0 = k - 3;
@@ -118,15 +132,36 @@ void Raytracer::LoadScene(const std::string file_name, const char* cube_map_file
 		unsigned int geom_id = rtcAttachGeometry(scene_, mesh);
 		rtcReleaseGeometry(mesh);
 	} // end of surfaces loop
+}
 
+void RayTracer::LoadScene(
+	const std::vector<ModelInfo>& models,
+	const std::vector<Shape*>& shapes,
+	const char* cubeMapFileNames[6]
+)
+{
+	cubemap_ = new CubeMap(cubeMapFileNames);
+
+	// Load all OBJ models with their transformations
+	for (const auto& model : models)
+	{
+		LoadModel(model.filePath, model.transform);
+	}
+
+	for (const auto& shape : shapes)
+	{
+		volumetricShapes_.push_back(shape);
+	}
+
+	// Commit scene
 	rtcCommitScene(scene_);
 }
 
 float clamp(const float x, const float x0 = 0.0f, const float x1 = 1.0f) {
-	return max(min(x, x1), x0);
+	return std::max(std::min(x, x1), x0);
 }
 
-RTCRay MakeSecondaryRay(const Vector3 origin, const Vector3 dir) {
+RTCRay MakeSecondaryRay(const Vector3& origin, const Vector3& dir) {
 
 	RTCRay ray = RTCRay();
 	ray.org_x = origin.x;
@@ -148,7 +183,7 @@ RTCRay MakeSecondaryRay(const Vector3 origin, const Vector3 dir) {
 	return ray;
 }
 
-bool Raytracer::IsHitPointVisible(const Vector3 hitPoint, const Vector3 lightPoint) {
+bool RayTracer::IsHitPointVisible(const Vector3& hitPoint, const Vector3& lightPoint) {
 	Vector3 l = lightPoint - hitPoint;
 	float dist = l.L2Norm();
 	l *= 1.0f / dist;
@@ -179,16 +214,16 @@ bool Raytracer::IsHitPointVisible(const Vector3 hitPoint, const Vector3 lightPoi
 	hit.Ng_z = 0.0f;
 
 	// merge ray and hit structures
-	RTCRayHit ray_hit;
-	ray_hit.ray = ray;
-	ray_hit.hit = hit;
+	RTCRayHit rayHit;
+	rayHit.ray = ray;
+	rayHit.hit = hit;
 
 	// intersect ray with the scene
 	RTCIntersectContext context;
 	rtcInitIntersectContext(&context);
-	rtcIntersect1(scene_, &context, &ray_hit);
+	rtcIntersect1(scene_, &context, &rayHit);
 
-	if (ray_hit.hit.geomID != RTC_INVALID_GEOMETRY_ID) {
+	if (rayHit.hit.geomID != RTC_INVALID_GEOMETRY_ID) {
 		return false;
 	}
 	else {
@@ -196,54 +231,89 @@ bool Raytracer::IsHitPointVisible(const Vector3 hitPoint, const Vector3 lightPoi
 	}
 }
 
-Vector3 Raytracer::TraceSDFRay(RTCRay ray, const int depth, const int max_depth) {
-    if (depth >= max_depth) {
-        return Vector3(0.0f, 0.0f, 0.0f);
-    }
+Vector3 RayTracer::TraceSDFRay(const RTCRay& ray, const int depth, const int maxDepth) {
+	if (depth >= maxDepth) {
+		return Vector3(0.0f, 0.0f, 0.0f);
+	}
 
-    const float step_size = 0.01f;
-    const float max_distance = 100.0f;
-    const int max_steps = 1000;
-    
-    float distance = 0.0f;
-    Vector3 position(ray.org_x, ray.org_y, ray.org_z);
-    Vector3 direction(ray.dir_x, ray.dir_y, ray.dir_z);
-    
-    for (int i = 0; i < max_steps; ++i) {
-        float min_dist = FLT_MAX;
-        
-        // Prechádzame všetkými volumetrickými objektmi
-        for (const auto& shape : volumetric_objects_) {
-            float dist = shape->SDF(position);
-            min_dist = min(min_dist, dist);
-        }
-        
-        if (min_dist < 0.001f) {
-            // Priesečník s SDF guľou
-            return Vector3(1.0f, 1.0f, 1.0f); // Biela farba pre guľu
-        }
-        
-        if (distance > max_distance) {
-            break;
-        }
-        
-        distance += min_dist;
-        position = position + direction * min_dist;
-    }
-    
-    // Ak nenájdeme priesečník, vrátime farbu z cubemap
-    Vector3 direction_vector(ray.dir_x, ray.dir_y, ray.dir_z);
-    direction_vector.Normalize();
-    Color3f background_color = cubemap_->get_texel(direction_vector);
-    return Vector3(background_color.r, background_color.g, background_color.b);
+	const float stepSize = 0.01f;
+	const float maxDistance = 100.0f;
+	const int maxSteps = 1000;
+
+	float distance = 0.0f;
+	Vector3 position(ray.org_x, ray.org_y, ray.org_z);
+	Vector3 direction(ray.dir_x, ray.dir_y, ray.dir_z);
+
+	for (int i = 0; i < maxSteps; ++i) {
+		float minDist = FLT_MAX;
+		Shape* closestShape = nullptr;
+
+		for (const auto& shape : volumetricShapes_) {
+			float dist = shape->SDF(position);
+			if (dist < minDist) {
+				minDist = dist;
+				closestShape = shape;
+			}
+		}
+
+		if (minDist < 0.001f && closestShape != nullptr) {
+			Vector3 normal = ComputeNormal(position, *closestShape);
+			normal.Normalize();
+
+			Vector3 lightDir = light_.GetOrigin() - position;
+			lightDir.Normalize();
+
+			// ambient
+			Vector3 ambientColor(0.025f, 0.025f, 0.025f);
+			Vector3 color = ambientColor;
+
+			// diffuse
+			float diffuse = std::max(0.0f, normal.DotProduct(lightDir));
+			if (IsHitPointVisible(position, light_.GetOrigin())) {
+				color += Vector3(diffuse, diffuse, diffuse);
+			}
+
+			// specular
+			Vector3 viewDir = -direction;
+			Vector3 reflectDir = 2.0f * normal.DotProduct(lightDir) * normal - lightDir;
+			float spec = powf(std::max(viewDir.DotProduct(reflectDir), 0.0f), 32.0f); // Shininess = 32
+			color += Vector3(spec, spec, spec);
+
+			return color;
+		}
+
+		if (distance > maxDistance) {
+			break;
+		}
+
+		distance += minDist;
+		position = position + direction * minDist;
+	}
+
+	Vector3 directionVector(ray.dir_x, ray.dir_y, ray.dir_z);
+	directionVector.Normalize();
+	Color3f backgroundColor = cubemap_->GetTexel(directionVector);
+	return Vector3(backgroundColor.r, backgroundColor.g, backgroundColor.b);
 }
 
-Vector3 Raytracer::TraceRay(RTCRay ray, const float n_1, const int depth, const int max_depth) {
-    if (sdf_mode) {
-        return TraceSDFRay(ray, depth, max_depth);
+
+Vector3 RayTracer::ComputeNormal(const Vector3& p, const Shape& shape) {
+	const float eps = 0.001f;
+
+	float dx = shape.SDF(p + Vector3(eps, 0.0f, 0.0f)) - shape.SDF(p - Vector3(eps, 0.0f, 0.0f));
+	float dy = shape.SDF(p + Vector3(0.0f, eps, 0.0f)) - shape.SDF(p - Vector3(0.0f, eps, 0.0f));
+	float dz = shape.SDF(p + Vector3(0.0f, 0.0f, eps)) - shape.SDF(p - Vector3(0.0f, 0.0f, eps));
+
+	return Vector3(dx, dy, dz) / (2.0f * eps);
+}
+
+
+Vector3 RayTracer::TraceRay(const RTCRay& ray, const float n_1, const int depth, const int maxDepth) {
+    if (sdfMode_) {
+        return TraceSDFRay(ray, depth, maxDepth);
     }
 
-    if (depth >= max_depth) {
+    if (depth >= maxDepth) {
         return Vector3(0.0f, 0.0f, 0.0f);
     }
 
@@ -256,139 +326,143 @@ Vector3 Raytracer::TraceRay(RTCRay ray, const float n_1, const int depth, const 
     hit.Ng_z = 0.0f;
 
     // merge ray and hit structures
-    RTCRayHit ray_hit;
-    ray_hit.ray = ray;
-    ray_hit.hit = hit;
+    RTCRayHit rayHit;
+    rayHit.ray = ray;
+    rayHit.hit = hit;
 
     // intersect ray with the scene
     RTCIntersectContext context;
     rtcInitIntersectContext(&context);
-    rtcIntersect1(scene_, &context, &ray_hit);
+    rtcIntersect1(scene_, &context, &rayHit);
 
-    Vector3 direction_vector{ ray_hit.ray.dir_x, ray_hit.ray.dir_y, ray_hit.ray.dir_z };
+    Vector3 directionVector{ rayHit.ray.dir_x, rayHit.ray.dir_y, rayHit.ray.dir_z };
 
-    if (ray_hit.hit.geomID == RTC_INVALID_GEOMETRY_ID)
+    if (rayHit.hit.geomID == RTC_INVALID_GEOMETRY_ID)
     {
-        Color3f background_color = cubemap_->get_texel(direction_vector);
-        return Vector3{ background_color.r, background_color.g, background_color.b };
+        Color3f backgroundColor = cubemap_->GetTexel(directionVector);
+        return Vector3{ backgroundColor.r, backgroundColor.g, backgroundColor.b };
     }
 
-    const Vector3 origin_point{ ray_hit.ray.org_x, ray_hit.ray.org_y, ray_hit.ray.org_z };
-    const Vector3 hit_point{
-        ray_hit.ray.org_x + ray_hit.ray.dir_x * ray_hit.ray.tfar,
-        ray_hit.ray.org_y + ray_hit.ray.dir_y * ray_hit.ray.tfar,
-        ray_hit.ray.org_z + ray_hit.ray.dir_z * ray_hit.ray.tfar
+    const Vector3 originPoint{ rayHit.ray.org_x, rayHit.ray.org_y, rayHit.ray.org_z };
+    const Vector3 hitPoint{
+        rayHit.ray.org_x + rayHit.ray.dir_x * rayHit.ray.tfar,
+        rayHit.ray.org_y + rayHit.ray.dir_y * rayHit.ray.tfar,
+        rayHit.ray.org_z + rayHit.ray.dir_z * rayHit.ray.tfar
     };
 
     // we hit something
-    RTCGeometry geometry = rtcGetGeometry(scene_, ray_hit.hit.geomID);
+    RTCGeometry geometry = rtcGetGeometry(scene_, rayHit.hit.geomID);
 
     Normal3f normal;
     // get interpolated normal
-    rtcInterpolate0(geometry, ray_hit.hit.primID, ray_hit.hit.u, ray_hit.hit.v,
+    rtcInterpolate0(geometry, rayHit.hit.primID, rayHit.hit.u, rayHit.hit.v,
         RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE, 0, &normal.x, 3);
-    Vector3 normal_vector{ normal.x, normal.y, normal.z };
+    Vector3 normalVector{ normal.x, normal.y, normal.z };
 
-    if (normal_vector.DotProduct(direction_vector) > 0.0f) {
-        normal_vector *= -1.0f;
+    if (normalVector.DotProduct(directionVector) > 0.0f) {
+        normalVector *= -1.0f;
     }
 
     // and texture coordinates
-    Coord2f tex_coord;
-    rtcInterpolate0(geometry, ray_hit.hit.primID, ray_hit.hit.u, ray_hit.hit.v,
-        RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE, 1, &tex_coord.u, 2);
+    Coord2f texCoord;
+    rtcInterpolate0(geometry, rayHit.hit.primID, rayHit.hit.u, rayHit.hit.v,
+        RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE, 1, &texCoord.u, 2);
 
     Material* material = (Material*)rtcGetGeometryUserData(geometry);
     assert(material);
 
-    if (normal_shader) {
-        return normal_vector;
+    if (normalShader_) {
+        return NormalShader(normalVector);
     }
-    else if (lambert_shader) {
-        return lambertShader(material, tex_coord, hit_point, normal_vector);
+    else if (lambertShader_) {
+        return LambertShader(*material, texCoord, hitPoint, normalVector);
     }
     else {
         if (material->shader == 3) {
-            return phongShader(material, tex_coord, hit_point, normal_vector, direction_vector, depth);
+            return PhongShader(*material, texCoord, hitPoint, normalVector, directionVector, depth);
         }
         else if (material->shader == 4) {
-            return transparentShader(ray, hit_point, normal_vector, direction_vector, material, n_1, depth);
+            return TransparentShader(ray, hitPoint, normalVector, directionVector, *material, n_1, depth);
         }
     }
-    return normal_vector;
+    return normalVector;
 }
 
-Vector3 Raytracer::lambertShader(const Material* material, const Coord2f tex_coord, const Vector3 hit_point, Vector3 normal_vector) {
-	Vector3 output_color;
-
-	Vector3 diffuse_color = Vector3{ material->diffuse.x, material->diffuse.y, material->diffuse.z };
-	Texture* diffuse_texture = material->get_texture(Material::kDiffuseMapSlot);
-	if (diffuse_texture) {
-		Color3f diffuse_texel = diffuse_texture->get_texel(tex_coord.u, 1 - tex_coord.v);
-		diffuse_color.x = diffuse_texel.r;
-		diffuse_color.y = diffuse_texel.g;
-		diffuse_color.z = diffuse_texel.b;
-	}
-
-	const Vector3 omni_light_position = light_.GetOrigin();
-
-	Vector3 l = omni_light_position - hit_point;
-	l.Normalize();
-
-	output_color += material->ambient;
-
-	if (IsHitPointVisible(hit_point, omni_light_position)) {
-		output_color += diffuse_color * clamp(normal_vector.DotProduct(l));
-	}
-
-	return output_color;
+Vector3 RayTracer::NormalShader(const Vector3& normalVector) {
+	return (normalVector + Vector3(1.0f, 1.0f, 1.0f)) * 0.5f;
 }
 
-Vector3 Raytracer::phongShader(const Material* material, const Coord2f tex_coord, const Vector3 hit_point, Vector3 normal_vector, const Vector3 direction_vector, const int depth) {
-	Vector3 output_color;
+Vector3 RayTracer::LambertShader(const Material& material, const Coord2f& texCoord, const Vector3& hitPoint, const Vector3& normalVector) {
+	Vector3 outputColor;
 
-	Vector3 diffuse_color = Vector3{ material->diffuse.x, material->diffuse.y, material->diffuse.z };
-	Texture* diffuse_texture = material->get_texture(Material::kDiffuseMapSlot);
-	if (diffuse_texture) {
-		Color3f diffuse_texel = diffuse_texture->get_texel(tex_coord.u, 1 - tex_coord.v);
-		diffuse_color.x = diffuse_texel.r;
-		diffuse_color.y = diffuse_texel.g;
-		diffuse_color.z = diffuse_texel.b;
+	Vector3 diffuseColor = Vector3{ material.diffuse.x, material.diffuse.y, material.diffuse.z };
+	Texture* diffuseTexture = material.get_texture(Material::kDiffuseMapSlot);
+	if (diffuseTexture) {
+		Color3f diffuseTexel = diffuseTexture->get_texel(texCoord.u, 1 - texCoord.v);
+		diffuseColor.x = diffuseTexel.r;
+		diffuseColor.y = diffuseTexel.g;
+		diffuseColor.z = diffuseTexel.b;
 	}
 
-	Vector3 specular_color = Vector3{ material->specular.x, material->specular.y, material->specular.z };
-	Texture* specular_texture = material->get_texture(Material::kSpecularMapSlot);
-	if (specular_texture) {
-		Color3f specular_texel = specular_texture->get_texel(tex_coord.u, 1 - tex_coord.v);
-		specular_color.x = specular_texel.r;
-		specular_color.y = specular_texel.g;
-		specular_color.z = specular_texel.b;
-	}
+	const Vector3 omniLightPosition = light_.GetOrigin();
 
-	const Vector3 omni_light_position = light_.GetOrigin();
-
-	Vector3 l = omni_light_position - hit_point;
+	Vector3 l = omniLightPosition - hitPoint;
 	l.Normalize();
 
-	output_color += material->ambient;
+	outputColor += material.ambient;
 
-	if (IsHitPointVisible(hit_point, omni_light_position)) {
+	if (IsHitPointVisible(hitPoint, omniLightPosition)) {
+		outputColor += diffuseColor * clamp(normalVector.DotProduct(l));
+	}
 
-		output_color += diffuse_color * clamp(normal_vector.DotProduct(l));
+	return outputColor;
+}
 
-		Vector3 l_r = 2 * (l.DotProduct(normal_vector) * normal_vector) - l;
+Vector3 RayTracer::PhongShader(const Material& material, const Coord2f& texCoord, const Vector3& hitPoint, const Vector3& normalVector, const Vector3& directionVector, const int depth) {
+	Vector3 outputColor;
+
+	Vector3 diffuseColor = Vector3{ material.diffuse.x, material.diffuse.y, material.diffuse.z };
+	Texture* diffuseTexture = material.get_texture(Material::kDiffuseMapSlot);
+	if (diffuseTexture) {
+		Color3f diffuseTexel = diffuseTexture->get_texel(texCoord.u, 1 - texCoord.v);
+		diffuseColor.x = diffuseTexel.r;
+		diffuseColor.y = diffuseTexel.g;
+		diffuseColor.z = diffuseTexel.b;
+	}
+
+	Vector3 specularColor = Vector3{ material.specular.x, material.specular.y, material.specular.z };
+	Texture* specularTexture = material.get_texture(Material::kSpecularMapSlot);
+	if (specularTexture) {
+		Color3f specularTexel = specularTexture->get_texel(texCoord.u, 1.0f - texCoord.v);
+		specularColor.x = specularTexel.r;
+		specularColor.y = specularTexel.g;
+		specularColor.z = specularTexel.b;
+	}
+
+	const Vector3 omniLightPosition = light_.GetOrigin();
+
+	Vector3 l = omniLightPosition - hitPoint;
+	l.Normalize();
+
+	outputColor += material.ambient;
+
+	if (IsHitPointVisible(hitPoint, omniLightPosition)) {
+
+		outputColor += diffuseColor * clamp(normalVector.DotProduct(l));
+
+		Vector3 l_r = 2.0f * (l.DotProduct(normalVector) * normalVector) - l;
 		l_r.Normalize();
 
-		RTCRay secondary_ray = MakeSecondaryRay(hit_point, l);
+		RTCRay secondaryRay = MakeSecondaryRay(hitPoint, l);
 
-		Vector3 l_i = TraceRay(secondary_ray, depth + 1);
+		Vector3 l_i = TraceRay(secondaryRay, depth + 1.0f);
 
-		output_color += specular_color * powf(clamp(l_r.DotProduct(-direction_vector)), material->shininess);
+		outputColor += specularColor * powf(clamp(l_r.DotProduct(-directionVector)), material.shininess);
 
-		output_color += l_i * specular_color * 0.2f;
+		outputColor += l_i * specularColor * 0.2f;
 	}
 
-	return output_color;
+	return outputColor;
 }
 
 Vector3 t_b_l(const float length, const Vector3 attenuation) {
@@ -396,204 +470,88 @@ Vector3 t_b_l(const float length, const Vector3 attenuation) {
 	return a;
 }
 
-double euclid_distance(Vector3 a, Vector3 b) {
-	return sqrt(powf(b.x - a.x, 2) + powf(b.y - a.y, 2) + powf(b.z - a.z, 2));
-}
-
-Vector3 Raytracer::transparentShader(RTCRay ray, const Vector3 hit_point, Vector3 normal_vector, const Vector3 direction_vector, const Material* material, float n_1, const int depth) {
-	float n_2 = material->ior;
-	if (n_1 == material->ior) {
+Vector3 RayTracer::TransparentShader(const RTCRay& ray, const Vector3& hitPoint, const Vector3& normalVector, const Vector3& directionVector, const Material& material, const float n_1, const int depth) {
+	float n_2 = material.ior;
+	if (n_1 == material.ior) {
 		n_2 = 1.0f;
 	}
 
 	float n_ratio = n_1 / n_2;
 	float r;
 
-	float cos_theta1 = normal_vector.DotProduct(-direction_vector);
+	float cos_theta1 = normalVector.DotProduct(-directionVector);
 	float temp = 1.0f - powf(n_1 / n_2, 2.0f) * (1.0f - powf(cos_theta1, 2.0f));
 	float cos_theta2 = sqrt(temp);
 	if (temp < 0.0f) {
 		r = 1.0f;
 	}
 	else {
-		float r_s = powf((n_2 * cos_theta2 - n_1 * cos_theta1) / (n_2 * cos_theta2 + n_1 * cos_theta1), 2);
-		float r_p = powf((n_2 * cos_theta1 - n_1 * cos_theta2) / (n_2 * cos_theta1 + n_1 * cos_theta2), 2);
+		float r_s = powf((n_2 * cos_theta2 - n_1 * cos_theta1) / (n_2 * cos_theta2 + n_1 * cos_theta1), 2.0f);
+		float r_p = powf((n_2 * cos_theta1 - n_1 * cos_theta2) / (n_2 * cos_theta1 + n_1 * cos_theta2), 2.0f);
 		r = (r_s + r_p) / 2.0f;
 	}
 
 
-	Vector3 refracted_ray_direction = n_1 / n_2 * direction_vector + (n_1 / n_2 * cos_theta1 - cos_theta2) * normal_vector;
-	Vector3 reflected_ray_direction = (2.0f * (-direction_vector).DotProduct(normal_vector)) * normal_vector - (-direction_vector);
-	Vector3 refl = TraceRay(MakeSecondaryRay(hit_point, reflected_ray_direction), n_1, depth + 1);
-	Vector3 refr = TraceRay(MakeSecondaryRay(hit_point, refracted_ray_direction), n_2, depth + 1);
-	return (refl * r + refr * (1.0 - r)) * t_b_l(n_1 == 1.0f ? 0.0f : euclid_distance(Vector3{ ray.org_x, ray.org_y, ray.org_z }, hit_point), material->attenuation);
+	Vector3 refractedRayDirection = n_1 / n_2 * directionVector + (n_1 / n_2 * cos_theta1 - cos_theta2) * normalVector;
+	Vector3 reflectedRayDirection = (2.0f * (-directionVector).DotProduct(normalVector)) * normalVector - (-directionVector);
+	Vector3 refl = TraceRay(MakeSecondaryRay(hitPoint, reflectedRayDirection), n_1, depth + 1);
+	Vector3 refr = TraceRay(MakeSecondaryRay(hitPoint, refractedRayDirection), n_2, depth + 1);
+	return (refl * r + refr * (1.0f - r)) * t_b_l(n_1 == 1.0f ? 0.0f : Vector3{ ray.org_x, ray.org_y, ray.org_z }.EuclideanDistance(hitPoint), material.attenuation);
 }
 
-Vector3 Raytracer::RayMarching(RTCRay ray, float& t) {
-	const float step_size = 0.01f;
-	const float max_distance = 100.0f;
-	const int max_steps = 1000;
-	
-	float distance = 0.0f;
-	Vector3 position(ray.org_x, ray.org_y, ray.org_z);
-	Vector3 direction(ray.dir_x, ray.dir_y, ray.dir_z);
-	
-	for (int i = 0; i < max_steps; ++i) {
-		float min_dist = FLT_MAX;
-		
-		// Prechádzame všetkými volumetrickými objektmi
-		for (const auto& shape : volumetric_objects_) {
-			float dist = shape->SDF(position);
-			min_dist = min(min_dist, dist);
-		}
-		
-		if (min_dist < 0.001f) {
-			t = distance;
-			return position;
-		}
-		
-		if (distance > max_distance) {
-			break;
-		}
-		
-		distance += min_dist;
-		position = position + direction * min_dist;
-	}
-	
-	t = FLT_MAX;
-	return Vector3(0.0f, 0.0f, 0.0f);
-}
-
-Vector3 Raytracer::SampleVolume(const Vector3& position) {
-	float min_dist = FLT_MAX;
-	Shape* closest_shape = nullptr;
-	
-	for (const auto& shape : volumetric_objects_) {
-		float dist = shape->SDF(position);
-		if (dist < min_dist) {
-			min_dist = dist;
-			closest_shape = shape;
-		}
-	}
-	
-	if (closest_shape) {
-		// Tu môžeme pridať vlastnú logiku pre vzorkovanie objemu
-		// Napríklad na základe vzdialenosti od stredu gule
-		return Vector3(1.0f, 1.0f, 1.0f); // Predvolená hodnota
-	}
-	
-	return Vector3(0.0f, 0.0f, 0.0f);
-}
-
-float Raytracer::HenyeyGreenstein(const Vector3& wi, const Vector3& wo, float g) {
-	float cos_theta = wi.DotProduct(wo);
-	float g2 = g * g;
-	return (1.0f - g2) / (4.0f * M_PI * pow(1.0f + g2 - 2.0f * g * cos_theta, 1.5f));
-}
-
-Vector3 Raytracer::ComputeTransmittance(const Vector3& start, const Vector3& end, float step_size) {
-	Vector3 transmittance(1.0f, 1.0f, 1.0f);
-	Vector3 direction = end - start;
-	direction.Normalize();
-	float distance = (end - start).L2Norm();
-	int steps = static_cast<int>(distance / step_size);
-	
-	for (int i = 0; i < steps; ++i) {
-		Vector3 position = start + direction * (i * step_size);
-		Vector3 density = SampleVolume(position);
-		
-		transmittance = transmittance * Vector3(
-			exp(-density.x * step_size),
-			exp(-density.y * step_size),
-			exp(-density.z * step_size)
-		);
-	}
-	
-	return transmittance;
-}
-
-Vector3 Raytracer::ComputeInScattering(const Vector3& start, const Vector3& end, float step_size, const Vector3& light_dir) {
-	Vector3 in_scattering(0.0f, 0.0f, 0.0f);
-	Vector3 direction = end - start;
-	direction.Normalize();
-	float distance = (end - start).L2Norm();
-	int steps = static_cast<int>(distance / step_size);
-	
-	for (int i = 0; i < steps; ++i) {
-		Vector3 position = start + direction * (i * step_size);
-		Vector3 density = SampleVolume(position);
-		
-		// Vypočítame transmittance pre aktuálny bod
-		Vector3 transmittance = ComputeTransmittance(position, end, step_size);
-		
-		// Pridáme príspevok k in-scattering
-		in_scattering = in_scattering + density * transmittance * step_size;
-	}
-	
-	return in_scattering;
-}
-
-Vector3 Raytracer::TraceVolumetricRay(RTCRay ray, const int depth, const int max_depth) {
-	if (depth >= max_depth) {
-		return Vector3(0.0f, 0.0f, 0.0f);
-	}
-	
-	float t;
-	Vector3 hit_point = RayMarching(ray, t);
-	
-	if (t == FLT_MAX) {
-		return Vector3(0.0f, 0.0f, 0.0f); // Žiadny priesečník
-	}
-	
-	// Vypočítame in-scattering
-	Vector3 light_dir = light_.GetOrigin() - hit_point;
-	light_dir.Normalize();
-	Vector3 in_scattering = ComputeInScattering(
-		Vector3(ray.org_x, ray.org_y, ray.org_z),
-		hit_point,
-		0.01f,
-		light_dir
-	);
-	
-	// Vypočítame transmittance
-	Vector3 transmittance = ComputeTransmittance(
-		Vector3(ray.org_x, ray.org_y, ray.org_z),
-		hit_point,
-		0.01f
-	);
-	
-	// Kombinujeme výsledky
-	return in_scattering + transmittance;
-}
-
-
-
-Color4f Raytracer::get_pixel(const int x, const int y, const float t)
+Color4f RayTracer::GetPixel(const int x, const int y, const float t)
 {
-	if (sampling) {
-		Vector3 accumulator;
+    if (sampling_) {
+        Vector3 accumulator;
 
-		for (int j = 0; j < 4; j++) {
-			for (int i = 0; i < 4; i++) {
-				float ksi_x = Random() / 4;
-				float ksi_y = Random() / 4;
+        for (int j = 0; j < 4; j++) {
+            for (int i = 0; i < 4; i++) {
+                float ksi_x = Random() / 4;
+                float ksi_y = Random() / 4;
 
-				RTCRay ray = camera_.GenerateRay(float(x) + i * (1.0f / 4) + ksi_x, float(y) + j * (1.0f / 4) + ksi_y);
-				accumulator += TraceRay(ray);
-			}
+                RTCRay ray = camera_.GenerateRay(float(x) + i * (1.0f / 4.0f) + ksi_x, float(y) + j * (1.0f / 4.0f) + ksi_y);
+                accumulator += TraceRay(ray);
+            }
+        }
+        accumulator /= 4.0f * 4.0f;
+
+        return accumulator.ToColor4fCompressed();
+    }
+    else {
+        return TraceRay(camera_.GenerateRay(float(x), float(y))).ToColor4fCompressed();
+    }
+}
+
+void RayTracer::MoveCamera()
+{
+	if (cameraMovementEnabled_) {
+		static float angle = 0.0f;
+		const float speed = 0.025f; 
+
+		Vector3 viewAt = camera_.GetViewAt();
+		Vector3 viewFrom = camera_.GetViewFrom();
+
+		// Vypočítame aktuálnu vzdialenosť medzi viewFrom a viewAt v rovine x-y
+		Vector3 direction = viewFrom - viewAt;
+		float currentRadius = sqrt(direction.x * direction.x + direction.y * direction.y); // Ignorujeme z-ovú súradnicu
+
+		// Meníme iba x a y pozíciu kamery
+		cameraX_ = viewAt.x + currentRadius * cosf(angle);
+		cameraY_ = viewAt.y + currentRadius * sinf(angle);
+		// Zachováme pôvodnú výšku kamery
+		cameraZ_ = viewFrom.z;
+
+		angle += speed;
+		if (angle > 2.0f * (float)M_PI) {
+			angle -= 2.0f * (float)M_PI;
 		}
-		accumulator /= 4 * 4;
 
-		return accumulator.ToColor4fCompressed();
-
-	}
-	else {
-		return TraceRay(camera_.GenerateRay(float(x), float(y))).ToColor4fCompressed();
+		// Nastavíme novú pozíciu kamery
+		camera_.SetViewFrom(Vector3(cameraX_, cameraY_, cameraZ_));
 	}
 }
 
-
-int Raytracer::Ui()
+int RayTracer::Ui()
 {
 	static float f = 0.0f;
 	static int counter = 0;
@@ -604,120 +562,141 @@ int Raytracer::Ui()
 	ImGui::Text("Surfaces = %d", surfaces_.size());
 	ImGui::Text("Materials = %d", materials_.size());
 	ImGui::Separator();
-	if (ImGui::RadioButton("Normal", normal_shader)) {
-		normal_shader = true;
-		lambert_shader = false;
-		phong_shader = false;
-		sdf_mode = false;
+	if (ImGui::RadioButton("Normal", normalShader_)) {
+		normalShader_ = true;
+		lambertShader_ = false;
+		phongShader_ = false;
+		sdfMode_ = false;
 	}
 	ImGui::SameLine();
-	if (ImGui::RadioButton("Lambert", lambert_shader)) {
-		normal_shader = false;
-		lambert_shader = true;
-		phong_shader = false;
-		sdf_mode = false;
+	if (ImGui::RadioButton("Lambert", lambertShader_)) {
+		normalShader_ = false;
+		lambertShader_ = true;
+		phongShader_ = false;
+		sdfMode_ = false;
 	}
 	ImGui::SameLine();
-	if (ImGui::RadioButton("Phong/Whitted", phong_shader)) {
-		normal_shader = false;
-		lambert_shader = false;
-		phong_shader = true;
-		sdf_mode = false;
+	if (ImGui::RadioButton("Phong/Whitted", phongShader_)) {
+		normalShader_ = false;
+		lambertShader_ = false;
+		phongShader_ = true;
+		sdfMode_ = false;
 	}
 	ImGui::SameLine();
-	if (ImGui::RadioButton("SDF", sdf_mode)) {
-		normal_shader = false;
-		lambert_shader = false;
-		phong_shader = false;
-		sdf_mode = true;
+	if (ImGui::RadioButton("SDF", sdfMode_)) {
+		normalShader_ = false;
+		lambertShader_ = false;
+		phongShader_ = false;
+		sdfMode_ = true;
 	}
 
+	ImGui::Checkbox("Camera Movement", &cameraMovementEnabled_);
 	ImGui::Checkbox("Vsync", &vsync_);
-	ImGui::Checkbox("Sampling", &sampling);
+	ImGui::Checkbox("Sampling", &sampling_);
 
-	//ImGui::Checkbox( "Demo Window", &show_demo_window ); // Edit bools storing our window open/close state
-	//ImGui::Checkbox( "Another Window", &show_another_window );
+    //ImGui::Checkbox( "Demo Window", &show_demo_window ); // Edit bools storing our window open/close state
+    //ImGui::Checkbox( "Another Window", &show_another_window );
 
-	//ImGui::SliderFloat( "float", &f, 0.0f, 1.0f ); // Edit 1 float using a slider from 0.0f to 1.0f  
-	//ImGui::ColorEdit3( "clear color", ( float* )&clear_color ); // Edit 3 floats representing a color
+    //ImGui::SliderFloat( "float", &f, 0.0f, 1.0f ); // Edit 1 float using a slider from 0.0f to 1.0f  
+    //ImGui::ColorEdit3( "clear color", ( float* )&clear_color ); // Edit 3 floats representing a color
+	
+    // Camera position sliders
+    if (ImGui::SliderFloat("Camera X", &cameraX_, -100.0f, 100.0f)) {
+        camera_.SetViewFrom(Vector3(cameraX_, cameraY_, cameraZ_));
+    }
+    if (ImGui::SliderFloat("Camera Y", &cameraY_, -100.0f, 100.0f)) {
+        camera_.SetViewFrom(Vector3(cameraX_, cameraY_, cameraZ_));
+    }
+    if (ImGui::SliderFloat("Camera Z", &cameraZ_, -100.0f, 100.0f)) {
+        camera_.SetViewFrom(Vector3(cameraX_, cameraY_, cameraZ_));
+    }
 
-	static int camera_x = camera_.GetViewFrom().x;
-	static int camera_y = camera_.GetViewFrom().y;
-	static int camera_z = camera_.GetViewFrom().z;
-	if (ImGui::SliderInt("Camera X", &camera_x, -100, 100)) {
-		camera_.SetViewFrom(Vector3(static_cast<float>(camera_x), static_cast<float>(camera_y), static_cast<float>(camera_z)));
-	}
-	if (ImGui::SliderInt("Camera Y", &camera_y, -100, 100)) {
-		camera_.SetViewFrom(Vector3(static_cast<float>(camera_x), static_cast<float>(camera_y), static_cast<float>(camera_z)));
-	}
-	if (ImGui::SliderInt("Camera Z", &camera_z, -100, 100)) {
-		camera_.SetViewFrom(Vector3(static_cast<float>(camera_x), static_cast<float>(camera_y), static_cast<float>(camera_z)));
-	}
+    // Camera rotation
+    static int cameraRotationX = 0;
+    static int cameraRotationY = 0;
+    static int cameraRotationZ = 0;
+    static int previousDragDeltaX = 0;
+    static int previousDragDeltaY = 0;
+    static int previousRotationZ = 0;
 
-	static int camera_rotation_x = 0;
-	static int camera_rotation_y = 0;
-	static int camera_rotation_z = 0;
-	static int previous_drag_delta_x = 0;
-	static int previous_drag_delta_y = 0;
-	static int previous_rotation_z = 0;
-	if (ImGui::SliderInt("Camera Rotation X", &camera_rotation_x, 0, 359)) {
-		Vector3 current_rotation = camera_.GetRotation();
-		current_rotation.x = camera_rotation_x;
-		camera_.SetRotation(current_rotation);
-	}
-	if (ImGui::SliderInt("Camera Rotation Y", &camera_rotation_y, 0, 359)) {
-		Vector3 current_rotation = camera_.GetRotation();
-		current_rotation.y = camera_rotation_y;
-		camera_.SetRotation(current_rotation);
-	}
-	if (ImGui::SliderInt("Camera Rotation Z", &camera_rotation_z, 0, 359)) {
-		Vector3 current_rotation = camera_.GetRotation();
-		current_rotation.z = camera_rotation_z;
-		camera_.SetRotation(current_rotation);
-	}
+    if (ImGui::SliderInt("Camera Rotation X", &cameraRotationX, 0, 359)) {
+        Vector3 currentRotation = camera_.GetRotation();
+        currentRotation.x = (float)cameraRotationX;
+        camera_.SetRotation(currentRotation);
+    }
+    if (ImGui::SliderInt("Camera Rotation Y", &cameraRotationY, 0, 359)) {
+        Vector3 currentRotation = camera_.GetRotation();
+        currentRotation.y = (float)cameraRotationY;
+        camera_.SetRotation(currentRotation);
+    }
+    if (ImGui::SliderInt("Camera Rotation Z", &cameraRotationZ, 0, 359)) {
+        Vector3 currentRotation = camera_.GetRotation();
+        currentRotation.z = (float)cameraRotationZ;
+        camera_.SetRotation(currentRotation);
+    }
 
-	if (ImGui::IsMouseDown(1)) {
-		if (ImGui::IsMouseDragging(1)) {
-			ImVec2 drag_delta = ImGui::GetMouseDragDelta(1);
-			int current_drag_delta_y = static_cast<int>(drag_delta.x);
-			int current_drag_delta_x = static_cast<int>(drag_delta.y);
-			Vector3 current_rotation = camera_.GetRotation();
-			current_rotation.x += current_drag_delta_x / 4 - previous_drag_delta_x / 4;
-			current_rotation.y += current_drag_delta_y / 4 - previous_drag_delta_y / 4;
-			camera_.SetRotation(current_rotation);
-			previous_drag_delta_x = current_drag_delta_x;
-			previous_drag_delta_y = current_drag_delta_y;
+    // Mouse rotation control
+    if (ImGui::IsMouseDown(1)) {
+        if (ImGui::IsMouseDragging(1)) {
+            ImVec2 dragDelta = ImGui::GetMouseDragDelta(1);
+            int currentDragDeltaY = static_cast<int>(dragDelta.x);
+            int currentDragDeltaX = static_cast<int>(dragDelta.y);
+            Vector3 currentRotation = camera_.GetRotation();
+            currentRotation.x += currentDragDeltaX / 4 - previousDragDeltaX / 4;
+            currentRotation.y += currentDragDeltaY / 4 - previousDragDeltaY / 4;
+            camera_.SetRotation(currentRotation);
+            previousDragDeltaX = currentDragDeltaX;
+            previousDragDeltaY = currentDragDeltaY;
 
-			current_rotation = camera_.GetRotation();
-			camera_rotation_x = current_rotation.x;
-			camera_rotation_y = current_rotation.y;
-		}
-	}
-	if (ImGui::IsMouseReleased(1)) {
-		previous_drag_delta_x = 0;
-		previous_drag_delta_y = 0;
-	}
+            currentRotation = camera_.GetRotation();
+            cameraRotationX = (int)currentRotation.x;
+            cameraRotationY = (int)currentRotation.y;
+        }
+    }
+    if (ImGui::IsMouseReleased(1)) {
+        previousDragDeltaX = 0;
+        previousDragDeltaY = 0;
+    }
 
-	static int light_x = light_.GetOrigin().x;
-	static int light_y = light_.GetOrigin().y;
-	static int light_z = light_.GetOrigin().z;
-	if (ImGui::SliderInt("Light X", &light_x, -1000, 1000)) {
-		light_.SetOrigin(Vector3(static_cast<float>(light_x), static_cast<float>(light_y), static_cast<float>(light_z)));
-	}
-	if (ImGui::SliderInt("Light Y", &light_y, -1000, 1000)) {
-		light_.SetOrigin(Vector3(static_cast<float>(light_x), static_cast<float>(light_y), static_cast<float>(light_z)));
-	}
-	if (ImGui::SliderInt("Light Z", &light_z, -1000, 1000)) {
-		light_.SetOrigin(Vector3(static_cast<float>(light_x), static_cast<float>(light_y), static_cast<float>(light_z)));
-	}
+    // Light position
+    static int lightX = (int)light_.GetOrigin().x;
+    static int lightY = (int)light_.GetOrigin().y;
+    static int lightZ = (int)light_.GetOrigin().z;
+    if (ImGui::SliderInt("Light X", &lightX, -1000, 1000)) {
+        light_.SetOrigin(Vector3(static_cast<float>(lightX), static_cast<float>(lightY), static_cast<float>(lightZ)));
+    }
+    if (ImGui::SliderInt("Light Y", &lightY, -1000, 1000)) {
+        light_.SetOrigin(Vector3(static_cast<float>(lightX), static_cast<float>(lightY), static_cast<float>(lightZ)));
+    }
+    if (ImGui::SliderInt("Light Z", &lightZ, -1000, 1000)) {
+        light_.SetOrigin(Vector3(static_cast<float>(lightX), static_cast<float>(lightY), static_cast<float>(lightZ)));
+    }
 
-	// Buttons return true when clicked (most widgets return true when edited/activated)
-	if (ImGui::Button("Button"))
-		counter++;
-	ImGui::SameLine();
-	ImGui::Text("counter = %d", counter);
+    // Save video button
+    if (ImGui::Button("Save Video and Exit")) {
+        cv::VideoWriter writer("frames/output.avi", 
+            cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), 
+            60, 
+            cv::Size(width(), height()));
 
-	ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+        if (writer.isOpened()) {
+            for (int i = 0; i < frameCount_; ++i) {
+                std::stringstream filename;
+                filename << "frames/frame_" << std::setw(6) << std::setfill('0') << i << ".ppm";
+                
+                cv::Mat frame = cv::imread(filename.str());
+                if (!frame.empty()) {
+                    writer.write(frame);
+                }
+            }
+            writer.release();
+        }
+
+        std::cout << "Video successfully created: frames/output.avi" << std::endl;
+        MessageBoxA(NULL, "Video saved successfully", "Success", MB_OK);
+        PostQuitMessage(0);
+    }
+
 	ImGui::End();
 
 	// 3. Show another simple window.

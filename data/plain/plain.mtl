@@ -1,25 +1,11 @@
-newmtl white_lambert
-    Ns 250
-    Ni 1.460
-    d 1
-    Tr 0
-    Tf 1 1 1
-    illum 2
-    Ka 0.2 0.2 0.2
-    Kd 0.95 0.95 0.95
-    Ks 0.5 0.5 0.5
-    Ke 0.0 0.0 0.0
-    shader 2
-
-newmtl purple_lambert
-    Ns 250
-    Ni 1.460
-    d 1
-    Tr 0
-    Tf 1 1 1
-    illum 2
-    Ka 0.2 0.0 0.2
-    Kd 0.6 0.0 0.6
-    Ks 0.5 0.5 0.5
-    Ke 0.0 0.0 0.0
-    shader 2
+newmtl wire_214229166
+	Ns 32
+	d 1
+	Tr 0
+	Tf 0.4 0.001 0.4
+	illum 2
+	Ka 0.83921576 0.89803928 0.65098041
+	Kd 0.83921576 0.89803928 0.65098041
+	Ks 0.34999999 0.34999999 0.34999999
+	Ni 1.5
+	shader 4

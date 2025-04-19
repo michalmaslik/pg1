@@ -109,6 +109,9 @@ public:
 	*/
 	char LargestComponent(const bool absolute_value = false) const;
 
+
+	float EuclideanDistance(const Vector3& v) const;
+
 	void Print();
 
 	Color3f ToColor3f();

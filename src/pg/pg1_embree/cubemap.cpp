@@ -1,19 +1,24 @@
 #include "stdafx.h"
 #include "cubeMap.h"
 
-CubeMap::CubeMap(const char* file_names[6])
+CubeMap::CubeMap(const char* fileNames[6])
 {
 	for (int i = 0; i < 6; i++) {
-		textures_[i] = new Texture(file_names[i]);
+		textures_[i] = new Texture(fileNames[i]);
 	}
 }
 
 CubeMap::~CubeMap()
 {
-	delete(textures_);
+	for (int i = 0; i < 6; ++i) {
+		if (textures_[i]) {
+			delete textures_[i];
+			textures_[i] = nullptr;
+		}
+	}
 }
 
-Color3f CubeMap::get_texel(Vector3 direction) const
+Color3f CubeMap::GetTexel(Vector3& direction) const
 {
 	direction.Normalize();
 	float u = 0.0f;

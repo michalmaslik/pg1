@@ -88,6 +88,11 @@ char Vector3::LargestComponent(const bool absolute_value) const
 	return -1;
 }
 
+float Vector3::EuclideanDistance(const Vector3& v) const
+{
+	return sqrt(powf(v.x - x, 2) + powf(v.y - y, 2) + powf(v.z - z, 2));
+}
+
 void Vector3::Print()
 {
 	printf("(%0.3f, %0.3f, %0.3f)\n", x, y, z);

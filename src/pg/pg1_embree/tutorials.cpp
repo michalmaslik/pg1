@@ -216,27 +216,38 @@ int tutorial_2()
 }
 
 /* raytracer mainloop */
-int tutorial_3( const std::string file_name, const char * config )
+int tutorial_3(const char* config)
 {
-	//SimpleGuiDX11 gui( 640, 480 );
-	//gui.MainLoop();
-	/*
-	Raytracer raytracer( 640, 480, deg2rad( 45.0 ),
-		Vector3( 175, -140, 130 ), Vector3( 0, 0, 35 ), config );
-	raytracer.LoadScene( file_name );
-	raytracer.MainLoop();*/
+	RayTracer rayTracer(640, 480, deg2rad(45.0),
+		Vector3(-20, 0, 0), Vector3(0, 0, 0), Vector3(0, 200, 1000), config);
 
-	return EXIT_SUCCESS;
-}
+	const char* cubeMapFileNames[6] = { 
+		"../../../data/cube_map/posx.jpg", 
+		"../../../data/cube_map/posy.jpg", 
+		"../../../data/cube_map/posz.jpg", 
+		"../../../data/cube_map/negx.jpg", 
+		"../../../data/cube_map/negy.jpg", 
+		"../../../data/cube_map/negz.jpg" 
+	};
 
-/* raytracer mainloop */
-int tutorial_4(const char* cubemap_file_names[6], const char* config)
-{
-	Raytracer raytracer(640, 480, deg2rad(45.0),
-		Vector3(2.5, 2.5, 0), Vector3(0, 0, 0), Vector3(0, 200, 1000), config);
+	std::vector<ModelInfo> models = {
+		ModelInfo{"../../../data/plain/plain.obj", Transform{Vector3(0.0f, 0.0f, -5.0f), Vector3(1.0f, 1.0f, 1.0f), Vector3(0.0f, 0.0f, 0.0f)}},
+		//ModelInfo{"../../../data/geosphere.obj", Transform{Vector3(0.0f, 0.0f, 0.0f), Vector3(3.0f, 3.0f, 3.0f), Vector3(0.0f, 0.0f, 0.0f)}},
+	};
 
-	raytracer.LoadScene("../../../data/geosphere.obj", cubemap_file_names);
-	raytracer.MainLoop();
+	Shape* sphere1 = new Sphere(Vector3(0.0f, 2.0f, 0.0f), 4.0f);
+	Shape* sphere2 = new Sphere(Vector3(0.0f, -2.0f, 3.0f), 3.0f);
+	SmoothUnion* smoothUnion = new SmoothUnion(*sphere1, *sphere2, 0.5f, Noise(Noise::NoiseType::FractalBrownianMotion, 0.6f, 1.2f), true);
+
+	std::vector<Shape*> volumetricShapes = {
+		//new Box( Vector3(0.0f, -4.0f, 0.0f), Vector3(2.0f, 4.0f, 6.0f), Noise(Noise::NoiseType::FractalBrownianMotion, 0.6f, 1.2f), true ),
+		//new Sphere(Vector3(0.0f, 4.0f, 0.0f), 4.0f, Noise(Noise::NoiseType::FractalBrownianMotion, 0.6f, 1.2f)),
+		smoothUnion,
+	};
+
+	rayTracer.LoadScene(models, volumetricShapes, cubeMapFileNames);
+
+	rayTracer.MainLoop();
 
 	return EXIT_SUCCESS;
 }

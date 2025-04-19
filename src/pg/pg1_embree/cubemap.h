@@ -11,15 +11,14 @@
 class CubeMap
 {
 public:
-	CubeMap(const char* file_names[6]);
+	CubeMap(const char* fileNames[6]);
 	~CubeMap();
-	Color3f get_texel(Vector3 direction) const;
-	Texture* textures_[6];
+	Color3f GetTexel(Vector3& direction) const;
+	
 
 private:
+	Texture* textures_[6];
 
 };
 
-
 #endif
-#pragma once

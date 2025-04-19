@@ -24,7 +24,8 @@ protected:
 	static LRESULT CALLBACK s_WndProc( HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam );		
 
 	virtual int Ui();
-	virtual Color4f get_pixel( const int x, const int y, const float t = 0.0f );
+	virtual Color4f GetPixel( const int x, const int y, const float t = 0.0f );
+	virtual void MoveCamera() {};
 
 	void Producer();
 
@@ -32,6 +33,8 @@ protected:
 	int height() const;
 
 	bool vsync_{ true };
+	bool rendering_{ true };
+	int frameCount_{ 0 };
 
 private:	
 	WNDCLASSEX wc_;

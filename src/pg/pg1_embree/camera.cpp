@@ -4,95 +4,102 @@
 #include <iostream>
 
 
-Camera::Camera(const int width, const int height, const float fov_y,
-	const Vector3 view_from, const Vector3 view_at)
+Camera::Camera(const int width, const int height, const float fovY,
+	const Vector3& viewFrom, const Vector3& viewAt)
 {
 	width_ = width;
 	height_ = height;
-	fov_y_ = fov_y;
+	fovY_ = fovY;
 
-	view_from_ = view_from;
-	view_at_ = view_at;
+	viewFrom_ = viewFrom;
+	viewAt_ = viewAt;
 
-	f_y_ = height / (2 * tan(fov_y / 2));
+	fY_ = height / (2 * tan(fovY / 2));
 
-	Vector3 z_c = view_from_ - view_at_;
+	Update_m_c_w_();
+}
+
+void Camera::Update_m_c_w_()
+{
+	Vector3 z_c = viewFrom_ - viewAt_;
 	z_c.Normalize();
 	Vector3 x_c = up_.CrossProduct(z_c);
 	x_c.Normalize();
 	Vector3 y_c = z_c.CrossProduct(x_c);
 	y_c.Normalize();
-	M_c_w_ = Matrix3x3(x_c, y_c, z_c);
+	m_c_w_ = Matrix3x3(x_c, y_c, z_c);
 }
 
-void Camera::SetViewFrom(const Vector3 new_view_from)
+void Camera::SetViewFrom(const Vector3& newViewFrom)
 {
-	view_from_ = new_view_from;
+	viewFrom_ = newViewFrom;
+	Update_m_c_w_();
 }
 
-Vector3 Camera::GetViewFrom()
+Vector3 Camera::GetViewFrom() const
 {
-	return view_from_;
+	return viewFrom_;
 }
 
-void Camera::SetViewAt(const Vector3 new_view_at)
+void Camera::SetViewAt(const Vector3& newViewAt)
 {
-	view_at_ = new_view_at;
+	viewAt_ = newViewAt;
+	Update_m_c_w_();
 }
 
-Vector3 Camera::GetViewAt()
+Vector3 Camera::GetViewAt() const
 {
-	return view_at_;
+	return viewAt_;
 }
 
-void Camera::SetRotation(const Vector3 new_rotation)
+void Camera::SetRotation(const Vector3& newRotation)
 {
-	rotation_.x = (static_cast<int>(new_rotation.x) % 360 + 360) % 360;
-	rotation_.y = (static_cast<int>(new_rotation.y) % 360 + 360) % 360;
-	rotation_.z = (static_cast<int>(new_rotation.z) % 360 + 360) % 360;
+	rotation_.x = (float) ( ((int)(newRotation.x) % 360 + 360) % 360 );
+	rotation_.y = (float) ( ((int)(newRotation.y) % 360 + 360) % 360 );
+	rotation_.z = (float) ( ((int)(newRotation.z) % 360 + 360) % 360 );
 }
 
-Vector3 Camera::GetRotation()
+Vector3 Camera::GetRotation() const
 {
 	return rotation_;
 }
 
-Matrix3x3 Camera::rotate_camera_x(const float degree_angle) const
+Matrix3x3 Camera::RotateCameraX(const float degreeAngle) const
 {
-	return M_c_w_ * Matrix3x3::RotationMatrixX(degree_angle);
+	return m_c_w_ * Matrix3x3::RotationMatrixX(degreeAngle);
 }
 
-Matrix3x3 Camera::rotate_camera_y(const float degree_angle) const
+Matrix3x3 Camera::RotateCameraY(const float degreeAngle) const
 {
-	return M_c_w_ * Matrix3x3::RotationMatrixY(degree_angle);
+	return m_c_w_ * Matrix3x3::RotationMatrixY(degreeAngle);
 }
 
-Matrix3x3 Camera::rotate_camera_z(const float degree_angle) const
+Matrix3x3 Camera::RotateCameraZ(const float degreeAngle) const
 {
-	return M_c_w_ * Matrix3x3::RotationMatrixZ(degree_angle);
+	return m_c_w_ * Matrix3x3::RotationMatrixZ(degreeAngle);
 }
 
-Matrix3x3 Camera::rotate_camera(const Vector3 degree_angles) const
+Matrix3x3 Camera::RotateCamera(const Vector3& degreeAngles) const
 {
-	return M_c_w_ * Matrix3x3::RotationMatrixX(degree_angles.x) * Matrix3x3::RotationMatrixY(degree_angles.y) * Matrix3x3::RotationMatrixZ(degree_angles.z);
+	return m_c_w_ * Matrix3x3::RotationMatrixX(degreeAngles.x) * Matrix3x3::RotationMatrixY(degreeAngles.y) * Matrix3x3::RotationMatrixZ(degreeAngles.z);
 }
 
-Matrix3x3 Camera::rotate_camera() const
+Matrix3x3 Camera::RotateCamera() const
 {
-	return M_c_w_ * Matrix3x3::RotationMatrixX(rotation_.x) * Matrix3x3::RotationMatrixY(rotation_.y) * Matrix3x3::RotationMatrixZ(rotation_.z);
+	return m_c_w_ * Matrix3x3::RotationMatrixX(rotation_.x) * Matrix3x3::RotationMatrixY(rotation_.y) * Matrix3x3::RotationMatrixZ(rotation_.z);
 }
 
 RTCRay Camera::GenerateRay(const float x_i, const float y_i) const
 {
 	RTCRay ray = RTCRay();
-	ray.org_x = view_from_.x;
-	ray.org_y = view_from_.y;
-	ray.org_z = view_from_.z;
+	ray.org_x = viewFrom_.x;
+	ray.org_y = viewFrom_.y;
+	ray.org_z = viewFrom_.z;
 	ray.tnear = FLT_MIN;
 
-	Vector3 d_c = Vector3{ x_i - width_ / 2, height_ / 2 - y_i, -f_y_ };
+	Vector3 d_c = Vector3{ x_i - width_ / 2, height_ / 2 - y_i, -fY_ };
 	d_c.Normalize();
-	Vector3 d_w = rotate_camera() * d_c; // rotate_camera returns rotated M_c_w_ matrix
+	Vector3 d_w = RotateCamera() * d_c; // RotateCamera returns rotated m_c_w_ matrix
 	d_c.Normalize();
 	ray.dir_x = d_w.x;
 	ray.dir_y = d_w.y;

@@ -10,17 +10,16 @@ class Light
 public:
 	Light() {}
 
-	Light(const Vector3 origin);
+	Light(const Vector3& origin);
 
-	void SetOrigin(const Vector3 new_origin);
+	void SetOrigin(const Vector3& newOrigin);
 
-	Vector3 GetOrigin();
+	Vector3 GetOrigin() const;
 
 private:
 
-	Vector3 org;
+	Vector3 origin_;
 
 };
 
 #endif
-#pragma once

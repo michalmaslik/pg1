@@ -47,7 +47,7 @@ Matrix3x3::Matrix3x3(const Vector3 basis_x, const Vector3 basis_y, const Vector3
 
 Matrix3x3 Matrix3x3::RotationMatrixX(float angleDegrees)
 {
-	float angleRadians = angleDegrees * (M_PI / 180.0);
+	float angleRadians = angleDegrees * ((float)M_PI / 180.0f);
 
 	float cosA = cos(angleRadians);
 	float sinA = sin(angleRadians);
@@ -59,7 +59,7 @@ Matrix3x3 Matrix3x3::RotationMatrixX(float angleDegrees)
 
 Matrix3x3 Matrix3x3::RotationMatrixY(float angleDegrees)
 {
-	float angleRadians = angleDegrees * (M_PI / 180.0);
+	float angleRadians = angleDegrees * ((float)M_PI / 180.0f);
 
 	float cosA = cos(angleRadians);
 	float sinA = sin(angleRadians);
@@ -71,7 +71,7 @@ Matrix3x3 Matrix3x3::RotationMatrixY(float angleDegrees)
 
 Matrix3x3 Matrix3x3::RotationMatrixZ(float angleDegrees)
 {
-	float angleRadians = angleDegrees * (M_PI / 180.0);
+	float angleRadians = angleDegrees * ((float)M_PI / 180.0f);
 
 	float cosA = cos(angleRadians);
 	float sinA = sin(angleRadians);

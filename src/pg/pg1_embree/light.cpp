@@ -1,17 +1,17 @@
 #include "stdafx.h"
 #include "light.h"
 
-Light::Light(const Vector3 origin)
+Light::Light(const Vector3& origin)
 {
-	org = origin;
+	origin_ = origin;
 }
 
-void Light::SetOrigin(const Vector3 new_origin)
+void Light::SetOrigin(const Vector3& newOrigin)
 {
-	org = new_origin;
+	origin_ = newOrigin;
 }
 
-Vector3 Light::GetOrigin()
+Vector3 Light::GetOrigin() const
 {
-	return org;
+	return origin_;
 }

@@ -1,3 +1,6 @@
+src/pg/pg1_embree/frames
+.vscode/
+
 # Windows thumbnail cache files
 Thumbs.db
 # Windows Installer files
