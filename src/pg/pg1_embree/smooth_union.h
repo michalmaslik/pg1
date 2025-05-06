@@ -3,32 +3,67 @@
 
 #include "shape.h"
 
+/*! \class SmoothUnion
+\brief Represents a smooth union of multiple 3D shapes.
+
+This class implements the Signed Distance Function (SDF) for a smooth union of shapes.
+The smoothness is controlled by a blending factor `k`.
+
+*/
 class SmoothUnion : public Shape {
 public:
-    SmoothUnion(Shape& a, Shape& b, const float k, const Noise& noise = {}, const bool useNoise = false) : Shape(noise, useNoise) {
-		a_ = &a;
-		b_ = &b;
-		k_ = k;
+    // Constructor: Initializes the smooth union with a list of shapes and noise
+    SmoothUnion(std::vector<Shape*> shapes, const Noise& noise) : Shape(1.0f, noise), shapes_(shapes) {}
 
-        if (useNoise) {
-            a_->SetNoise(noise);
-            a_->SetUseNoise(true);
-            b_->SetNoise(noise);
-            b_->SetUseNoise(true);
+    // Adds a shape to the union
+    void AddShape(Shape* shape) {
+        shapes_.push_back(shape);
+    }
+
+    // Computes the Signed Distance Function (SDF) for a given point
+    float SDF(Vector3 point) const override {
+        if (Shape::useNoise) {
+            return SDFNoise(point);
         }
+
+        if (shapes_.empty()) return FLT_MAX;
+
+        float sdfValue = shapes_[0]->SDF(point);
+        for (size_t i = 1; i < shapes_.size(); ++i) {
+            float d1 = sdfValue;
+            float d2 = shapes_[i]->SDF(point);
+            sdfValue = Smooth(d1, d2, shapes_[i]->k_);
+        }
+        return sdfValue;
     }
 
-    float SDF(const Vector3& point) const override {
-        float d1 = a_->SDF(point);
-        float d2 = b_->SDF(point);
-        float h = max(k_ - std::abs(d1 - d2), 0.0f) / k_;
-        return min(d1, d2) - h * h * k_ * 0.25f;
+    // Computes the SDF with noise applied
+    float SDFNoise(Vector3 point) const override {
+        return SDFNoise(point, noise_);
     }
 
-private:
-    Shape* a_;
-    Shape* b_;
-    float k_;  // parameter pre hladkosť spojenia
+    // Computes the SDF with a specific noise configuration
+    float SDFNoise(Vector3 point, const Noise& noise) const override {
+        if (shapes_.empty()) return FLT_MAX;
+
+        float sdfValue = shapes_[0]->SDFNoise(point, noise);
+        for (size_t i = 1; i < shapes_.size(); ++i) {
+            float d1 = sdfValue;
+            float d2 = shapes_[i]->SDFNoise(point, noise);
+            sdfValue = Smooth(d1, d2, shapes_[i]->k_);
+        }
+        return sdfValue;
+    }
+
+    // Computes the smooth union of two SDF values
+    static float Smooth(const float d1, const float d2, const float k) {
+        float h = clamp(0.5f + 0.5f * (d2 - d1) / k, 0.0f, 1.0f);
+        return (d2 * (1.0f - h) + d1 * h) - k * h * (1.0f - h);
+    }
+
+    std::vector<Shape*> shapes_; // List of shapes in the union
+
 };
 
 #endif
+

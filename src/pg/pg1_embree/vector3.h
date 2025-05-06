@@ -55,6 +55,8 @@ public:
 	*/
 	Vector3(const float x, const float y, const float z) : x(x), y(y), z(z) {}
 
+	Vector3(const float xyz) : x(xyz), y(xyz), z(xyz) {}
+
 	//! Konstruktor z pole.
 	/*!
 	Inicializuje složky vektoru podle zadaných hodnot pole,
@@ -142,13 +144,6 @@ public:
 	friend void operator/=(Vector3& v, const float a);
 
 	friend bool operator==(const Vector3& u, const Vector3& v);
-
-	/*
-	explicit operator Color4f() const {
-		Color4f tmp = Color4f{ x, y, z, 1.0f };
-		tmp.compress(); // linear rgb to srgb
-		return tmp;
-	};*/
 };
 
 #endif

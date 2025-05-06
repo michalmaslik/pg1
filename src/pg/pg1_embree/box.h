@@ -4,29 +4,47 @@
 #include "shape.h"
 #include "mymath.h"
 
+/*! \class Box
+\brief Represents an axis-aligned box in 3D space.
+
+This class implements the Signed Distance Function (SDF) for an axis-aligned box.
+The box is defined by its center and half-size along each axis.
+
+*/
 class Box : public Shape {
 public:
-    Box(const Vector3& center, const Vector3& halfSize, const Noise& noise = {}, const bool useNoise = false)
-        : Shape(noise, useNoise) {
+    // Constructor: Initializes the box with a center, half-size, smoothing factor, and noise
+    Box(const Vector3& center, const Vector3& halfSize, const float k = 1.0f, const Noise& noise = {})
+        : Shape(k, noise) {
         center_ = center;
         halfSize_ = halfSize;
     }
 
-    float SDF(const Vector3& point) const override {
-        Vector3 q = (point - center_).Abs() - halfSize_;
-
-        float distance = q.Max(0.0f).L2Norm() + min(max(q.x, max(q.y, q.z)), 0.0f);
-
-        if (useNoise_) {
-            distance += noise_.Generate(point);
+    // Computes the Signed Distance Function (SDF) for a given point
+    float SDF(Vector3 point) const override {
+        if (Shape::useNoise) {
+            return SDFNoise(point);
         }
+        Vector3 q = (point - center_).Abs() - halfSize_;
+        return q.Max(0.0f).L2Norm() + min(max(q.x, max(q.y, q.z)), 0.0f);
+    }
 
-        return distance;
+    // Computes the SDF with noise applied
+    float SDFNoise(Vector3 point) const override {
+        return SDFNoise(point, noise_);
+    }
+
+    // Computes the SDF with a specific noise configuration
+    float SDFNoise(Vector3 point, const Noise& noise) const override {
+        Vector3 q = (point - center_).Abs() - halfSize_;
+        float distance = q.Max(0.0f).L2Norm() + min(max(q.x, max(q.y, q.z)), 0.0f);
+        return distance + noise.Generate(point);
     }
 
 private:
-    Vector3 center_;
-    Vector3 halfSize_;
+    Vector3 center_;   // Center of the box
+    Vector3 halfSize_; // Half-size of the box along each axis
 };
 
 #endif
+

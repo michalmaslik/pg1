@@ -143,6 +143,7 @@ void SimpleGuiDX11::Producer()
 			// Vytvoríme názov súboru s leading zeros
 			std::stringstream filename;
 			filename << "frames/frame_" << std::setw(6) << std::setfill('0') << frameCount_ << ".ppm";
+			std::cout << "Saving frame: " << filename.str() << std::endl;
 
 			// Otvoríme súbor pre zápis
 			std::ofstream file(filename.str(), std::ios::binary);

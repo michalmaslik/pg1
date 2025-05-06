@@ -218,8 +218,8 @@ int tutorial_2()
 /* raytracer mainloop */
 int tutorial_3(const char* config)
 {
-	RayTracer rayTracer(640, 480, deg2rad(45.0),
-		Vector3(-20, 0, 0), Vector3(0, 0, 0), Vector3(0, 200, 1000), config);
+	RayTracer rayTracer(640, 480, deg2rad(45.0f),
+		Vector3(15.f, 0.f, 5.f), Vector3(0.f, 0.f, 0.f), Vector3(0.f, 200.f, 1000.f), config);
 
 	const char* cubeMapFileNames[6] = { 
 		"../../../data/cube_map/posx.jpg", 
@@ -231,18 +231,21 @@ int tutorial_3(const char* config)
 	};
 
 	std::vector<ModelInfo> models = {
-		ModelInfo{"../../../data/plain/plain.obj", Transform{Vector3(0.0f, 0.0f, -5.0f), Vector3(1.0f, 1.0f, 1.0f), Vector3(0.0f, 0.0f, 0.0f)}},
+		//ModelInfo{"../../../data/plane/plane.obj", Transform{Vector3(0.0f, 0.0f, 0.0f), Vector3(1.0f, 1.0f, 1.0f), Vector3(0.0f, 0.0f, 0.0f)}},
 		//ModelInfo{"../../../data/geosphere.obj", Transform{Vector3(0.0f, 0.0f, 0.0f), Vector3(3.0f, 3.0f, 3.0f), Vector3(0.0f, 0.0f, 0.0f)}},
 	};
 
-	Shape* sphere1 = new Sphere(Vector3(0.0f, 2.0f, 0.0f), 4.0f);
-	Shape* sphere2 = new Sphere(Vector3(0.0f, -2.0f, 3.0f), 3.0f);
-	SmoothUnion* smoothUnion = new SmoothUnion(*sphere1, *sphere2, 0.5f, Noise(Noise::NoiseType::FractalBrownianMotion, 0.6f, 1.2f), true);
+	SmoothUnion* smoothUnion = new SmoothUnion({
+		new Sphere(Vector3(0.0f, 0.0f, 1.0f), 4.0f, 1.0f),
+		//new Sphere(Vector3(-8.0f, 2.0f, -1.0f), 5.6f, 1.0f),
+		 //new Sphere(Vector3(-4.0f, 6.0f, 3.0f), 5.6f, 3.0f),
+		 //new Sphere(Vector3(0.0f, 0.0f, 0.0f), 8.0f, 3.0f),
+		new Plane(0.01f)
+		}, Noise(Noise::NoiseType::FractalBrownianMotion, 1.0f / 3.2f, 7.0f));
 
 	std::vector<Shape*> volumetricShapes = {
-		//new Box( Vector3(0.0f, -4.0f, 0.0f), Vector3(2.0f, 4.0f, 6.0f), Noise(Noise::NoiseType::FractalBrownianMotion, 0.6f, 1.2f), true ),
-		//new Sphere(Vector3(0.0f, 4.0f, 0.0f), 4.0f, Noise(Noise::NoiseType::FractalBrownianMotion, 0.6f, 1.2f)),
-		smoothUnion,
+		//smoothUnion,
+		new Sphere(Vector3(0.0f, 0.0f, 0.0f), 4.0f, 1.0f, Noise(Noise::NoiseType::FractalBrownianMotion, 0.7f, 3.0f))
 	};
 
 	rayTracer.LoadScene(models, volumetricShapes, cubeMapFileNames);

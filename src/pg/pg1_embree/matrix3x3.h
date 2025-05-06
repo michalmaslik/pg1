@@ -55,6 +55,7 @@ public:
 	*/
 	float get(const int row, const int column) const;
 
+	friend Matrix3x3 operator*(const float b, const Matrix3x3& a);
 	friend Vector3 operator*(const Matrix3x3& a, const Vector3& b);
 	friend Matrix3x3 operator*(const Matrix3x3& a, const Matrix3x3& b);
 

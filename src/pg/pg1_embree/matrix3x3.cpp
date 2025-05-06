@@ -102,6 +102,13 @@ float Matrix3x3::get(const int row, const int column) const
 	return data_[column + row * 3];
 }
 
+Matrix3x3 operator*(const float b, const Matrix3x3& a)
+{
+	return Matrix3x3(a.m00_ * b, a.m01_ * b, a.m02_ * b,
+		a.m10_ * b, a.m11_ * b, a.m12_ * b,
+		a.m20_ * b, a.m21_ * b, a.m22_ * b);
+}
+
 Vector3 operator*(const Matrix3x3& a, const Vector3& b)
 {
 	return Vector3(a.m00_ * b.x + a.m01_ * b.y + a.m02_ * b.z,

@@ -7,56 +7,67 @@
 /*! \class Camera
 \brief A simple pin-hole camera.
 
-\author Tomáš Fabián
-\version 1.0
-\date 2018
+This class represents a pin-hole camera model used for ray tracing. It supports generating primary rays,
+setting the camera's position and orientation, and applying rotations.
+
 */
 class Camera
 {
 public:
-	Camera() {}
+    // Default constructor: Initializes the camera with default parameters
+    Camera() {}
 
-	Camera(const int width, const int height, const float fovY,
-		const Vector3& viewFrom, const Vector3& viewAt);
+    // Constructor: Initializes the camera with specific parameters
+    Camera(const int width, const int height, const float fovY,
+        const Vector3& viewFrom, const Vector3& viewAt);
 
-	/* generate primary ray, top-left pixel image coordinates (xi, yi) are in the range <0, 1) x <0, 1) */
-	RTCRay GenerateRay(const float x_i, const float y_i) const;
+    // Generates a primary ray for a given pixel coordinate (x_i, y_i)
+    // Pixel coordinates are normalized to the range <0, 1) x <0, 1)
+    RTCRay GenerateRay(const float x_i, const float y_i) const;
 
-	void SetViewFrom(const Vector3& newViewFrom);
+    // Sets the camera's position (viewFrom)
+    void SetViewFrom(const Vector3& newViewFrom);
 
-	Vector3 GetViewFrom() const;
+    // Gets the camera's current position (viewFrom)
+    Vector3 GetViewFrom() const;
 
-	void SetViewAt(const Vector3& newViewAt);
+    // Sets the camera's target point (viewAt)
+    void SetViewAt(const Vector3& newViewAt);
 
-	Vector3 GetViewAt() const;
+    // Gets the camera's current target point (viewAt)
+    Vector3 GetViewAt() const;
 
-	void SetRotation(const Vector3& newRotation);
+    // Sets the camera's rotation angles (in degrees)
+    void SetRotation(const Vector3& newRotation);
 
-	Vector3 GetRotation() const;
+    // Gets the camera's current rotation angles (in degrees)
+    Vector3 GetRotation() const;
 
 private:
-	void Update_m_c_w_();
-	
-	int width_{ 640 }; // image width (px)
-	int height_{ 480 };  // image height (px)
-	float fovY_{ 0.785f }; // vertical field of view (rad)
+    // Updates the camera-to-world transformation matrix (m_c_w_)
+    void Update_m_c_w_();
 
-	Vector3 viewFrom_; // ray origin or eye or O
-	Vector3 viewAt_; // target T
-	Vector3 up_{ Vector3(0.0f, 0.0f, 1.0f) }; // up vector
+    int width_{ 640 }; // Image width in pixels
+    int height_{ 480 }; // Image height in pixels
+    float fov_y_{ 0.785f }; // Vertical field of view in radians
 
-	float fY_{ 1.0f }; // focal lenght (px)
+    Vector3 viewFrom_; // Camera position (eye or origin)
+    Vector3 viewAt_; // Target point the camera is looking at
+    Vector3 up_{ Vector3(0.0f, 0.0f, 1.0f) }; // Up vector for orientation
 
-	Matrix3x3 m_c_w_; // transformation matrix from CS -> WS	
+    float f_y_{ 1.0f }; // Focal length in pixels
 
-	Vector3 rotation_{ 0.0f, 0.0f, 0.0f };
+    Matrix3x3 m_c_w_; // Transformation matrix from camera space to world space
 
-	Matrix3x3 RotateCameraX(const float degreeAngle) const;
-	Matrix3x3 RotateCameraY(const float degreeAngle) const;
-	Matrix3x3 RotateCameraZ(const float degreeAngle) const;
-	Matrix3x3 RotateCamera(const Vector3& degreeAngles) const;
-	Matrix3x3 RotateCamera() const;
+    Vector3 rotation_{ 0.0f, 0.0f, 0.0f }; // Rotation angles in degrees
 
+    // Helper functions for generating rotation matrices
+    Matrix3x3 RotateCameraX(const float degreeAngle) const;
+    Matrix3x3 RotateCameraY(const float degreeAngle) const;
+    Matrix3x3 RotateCameraZ(const float degreeAngle) const;
+    Matrix3x3 RotateCamera(const Vector3& degreeAngles) const;
+    Matrix3x3 RotateCamera() const;
 };
 
 #endif
+

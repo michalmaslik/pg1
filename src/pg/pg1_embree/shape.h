@@ -1,20 +1,37 @@
-#ifndef SHAPE_H_
-#define SHAPE_H_
+#ifndef SHAPE_H_  
+#define SHAPE_H_  
 
-#include "vector3.h"
-#include "noise.h"
+#include "mymath.h"  
+#include "noise.h"  
 
+/*! \class Shape
+\brief Abstract base class for 3D shapes.
+
+This class provides a common interface for all shapes, including methods for computing
+the Signed Distance Function (SDF) and its noisy variants.
+
+*/
 class Shape {
 public:
-	Shape(const Noise& noise = {}, const bool useNoise = false) : noise_(noise), useNoise_(useNoise) {}
-    virtual ~Shape() = default;
-    virtual float SDF(const Vector3& point) const = 0;
-    void SetNoise(const Noise& noise) { noise_ = noise; }
-    void SetUseNoise(const bool useNoise) { useNoise_ = useNoise; }
+	// Constructor: Initializes the shape with a smoothing factor and noise
+	Shape(const float k = 1.0f, const Noise& noise = {}) : k_(k), noise_(noise) {}
 
-protected:
-    Noise noise_;
-    bool useNoise_;
+	// Virtual destructor: Ensures proper cleanup of derived classes
+	virtual ~Shape() = default;
+
+	// Computes the Signed Distance Function (SDF) for a given point
+	virtual float SDF(Vector3 point) const = 0;
+
+	// Computes the SDF with noise applied
+	virtual float SDFNoise(Vector3 point) const = 0;
+
+	// Computes the SDF with a specific noise configuration
+	virtual float SDFNoise(Vector3 point, const Noise& noise) const = 0;
+
+	float k_;  // Smoothing factor for blending shapes
+	Noise noise_;  // Noise configuration for the shape
+
+	static bool useNoise; // Global flag to enable or disable noise
 };
 
 #endif
