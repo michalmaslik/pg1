@@ -95,10 +95,12 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>C:\Users\micha\Documents\pg1\src\libs\opencv\include</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>C:\Users\micha\Documents\pg1\src\libs\opencv\lib</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -111,11 +113,13 @@
       <ConformanceMode>true</ConformanceMode>
       <OpenMPSupport>true</OpenMPSupport>
       <AdditionalOptions>/Zc:twoPhase- %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>C:\Users\micha\Documents\pg1\src\libs\opencv\include;C:\Users\micha\Documents\pg1\src\libs\freeimage\include;</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>embree3.lib;D3d11.lib;d3dcompiler.lib;FreeImaged.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>embree3.lib;D3d11.lib;d3dcompiler.lib;opencv_world343.lib;opencv_world343d.lib;FreeImage.lib;</AdditionalDependencies>
+      <AdditionalLibraryDirectories>C:\Users\micha\Documents\pg1\src\libs\opencv\lib;C:\Users\micha\Documents\pg1\src\libs\freeimage\lib;</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -128,12 +132,14 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>C:\Users\micha\Documents\pg1\src\libs\opencv\include</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>C:\Users\micha\Documents\pg1\src\libs\opencv\lib</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -148,13 +154,15 @@
       <ConformanceMode>true</ConformanceMode>
       <OpenMPSupport>true</OpenMPSupport>
       <AdditionalOptions>/Zc:twoPhase- %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>C:\Users\micha\Documents\pg1\src\libs\opencv\include;C:\Users\micha\Documents\pg1\src\libs\freeimage\include;</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>embree3.lib;D3d11.lib;d3dcompiler.lib;FreeImage.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>embree3.lib;D3d11.lib;d3dcompiler.lib;opencv_world343.lib;opencv_world343d.lib;FreeImage.lib;</AdditionalDependencies>
+      <AdditionalLibraryDirectories>C:\Users\micha\Documents\pg1\src\libs\opencv\lib;C:\Users\micha\Documents\pg1\src\libs\freeimage\lib;</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -174,6 +182,7 @@
     <ClInclude Include="mymath.h" />
     <ClInclude Include="objloader.h" />
     <ClInclude Include="raytracer.h" />
+    <ClInclude Include="shape.h" />
     <ClInclude Include="simpleguidx11.h" />
     <ClInclude Include="stdafx.h" />
     <ClInclude Include="structs.h" />
@@ -201,6 +210,7 @@
     <ClCompile Include="objloader.cpp" />
     <ClCompile Include="raytracer.cpp" />
     <ClCompile Include="pg1_embree.cpp" />
+    <ClCompile Include="shape.cpp" />
     <ClCompile Include="simpleguidx11.cpp" />
     <ClCompile Include="stdafx.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
