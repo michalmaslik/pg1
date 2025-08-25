@@ -1,4 +1,5 @@
 src/pg/pg1_embree/frames
+src/libs/opencv
 .vscode/
 
 # Windows thumbnail cache files
