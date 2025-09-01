@@ -1,0 +1,33 @@
+// Copyright 2019 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "common.isph"
+
+struct OpenVKLVolume;
+typedef OpenVKLVolume *uniform VKLVolume;
+
+VKL_API void vklGetBoundingBoxRef(VKLVolume volume,
+                                  vkl_box3f *uniform boundingBox);
+
+VKL_FORCEINLINE uniform vkl_box3f vklGetBoundingBox(VKLVolume volume)
+{
+  uniform vkl_box3f result;
+  vklGetBoundingBoxRef(volume, &result);
+  return result;
+}
+
+VKL_API uniform unsigned int vklGetNumAttributes(VKLVolume volume);
+
+VKL_API void vklGetValueRangeRef(VKLVolume volume,
+                                 uniform unsigned int attributeIndex,
+                                 vkl_range1f *uniform valueRange);
+
+VKL_FORCEINLINE uniform vkl_range1f
+vklGetValueRange(VKLVolume volume, uniform unsigned int attributeIndex = 0)
+{
+  uniform vkl_range1f result;
+  vklGetValueRangeRef(volume, attributeIndex, &result);
+  return result;
+}

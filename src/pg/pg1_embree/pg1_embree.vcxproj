@@ -113,13 +113,13 @@
       <ConformanceMode>true</ConformanceMode>
       <OpenMPSupport>true</OpenMPSupport>
       <AdditionalOptions>/Zc:twoPhase- %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>C:\Users\micha\Documents\pg1\src\libs\opencv\include;C:\Users\micha\Documents\pg1\src\libs\freeimage\include;</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\micha\Documents\pg1\src\libs\opencv\include;C:\Users\micha\Documents\pg1\src\libs\freeimage\include;C:\Users\micha\Documents\pg1\src\libs\openvkl\include</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>embree3.lib;D3d11.lib;d3dcompiler.lib;opencv_world343.lib;opencv_world343d.lib;FreeImage.lib;</AdditionalDependencies>
-      <AdditionalLibraryDirectories>C:\Users\micha\Documents\pg1\src\libs\opencv\lib;C:\Users\micha\Documents\pg1\src\libs\freeimage\lib;</AdditionalLibraryDirectories>
+      <AdditionalDependencies>embree3.lib;D3d11.lib;d3dcompiler.lib;opencv_world343.lib;opencv_world343d.lib;FreeImage.lib;openvkl.lib;openvkl_module_cpu_device.lib;openvkl_module_cpu_device_4.lib;openvkl_module_cpu_device_8.lib;openvkl_module_cpu_device_16.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>C:\Users\micha\Documents\pg1\src\libs\opencv\lib;C:\Users\micha\Documents\pg1\src\libs\freeimage\lib;C:\Users\micha\Documents\pg1\src\libs\openvkl\lib</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -154,15 +154,15 @@
       <ConformanceMode>true</ConformanceMode>
       <OpenMPSupport>true</OpenMPSupport>
       <AdditionalOptions>/Zc:twoPhase- %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>C:\Users\micha\Documents\pg1\src\libs\opencv\include;C:\Users\micha\Documents\pg1\src\libs\freeimage\include;</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\micha\Documents\pg1\src\libs\opencv\include;C:\Users\micha\Documents\pg1\src\libs\freeimage\include;C:\Users\micha\Documents\pg1\src\libs\openvkl\include</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>embree3.lib;D3d11.lib;d3dcompiler.lib;opencv_world343.lib;opencv_world343d.lib;FreeImage.lib;</AdditionalDependencies>
-      <AdditionalLibraryDirectories>C:\Users\micha\Documents\pg1\src\libs\opencv\lib;C:\Users\micha\Documents\pg1\src\libs\freeimage\lib;</AdditionalLibraryDirectories>
+      <AdditionalDependencies>embree3.lib;D3d11.lib;d3dcompiler.lib;opencv_world343.lib;opencv_world343d.lib;FreeImage.lib;openvkl.lib;openvkl_module_cpu_device.lib;openvkl_module_cpu_device_4.lib;openvkl_module_cpu_device_8.lib;openvkl_module_cpu_device_16.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>C:\Users\micha\Documents\pg1\src\libs\opencv\lib;C:\Users\micha\Documents\pg1\src\libs\freeimage\lib;C:\Users\micha\Documents\pg1\src\libs\openvkl\lib</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -226,6 +226,10 @@
     <ClCompile Include="utils.cpp" />
     <ClCompile Include="vector3.cpp" />
     <ClCompile Include="vertex.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="api.md" />
+    <None Include="README.md" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

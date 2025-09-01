@@ -70,7 +70,7 @@ const Matrix3x3 m3 = Matrix3x3(
 );
 
 // Computes fractal Brownian motion (FBM) with 4 octaves
-inline float fbm_4(Vector3& x) {
+inline float fbm_4(Vector3 x) {  // Removed reference to make copy
     float f = 2.0; // Frequency multiplier
     float s = 0.5; // Amplitude scaling factor
     float a = 0.0; // Accumulated noise value
@@ -81,7 +81,7 @@ inline float fbm_4(Vector3& x) {
         float n = noise(x);
         a += b * n;
         b *= s;
-        x = f * m3 * x; // Rotate and scale the input point
+        x = f * m3 * x; // Rotate and scale the input point (now safely modifying copy)
     }
     return a;
 }
@@ -110,12 +110,14 @@ public:
     }
 
     // Generates noise for a given point
-    float Generate(Vector3& point) const {
+    float Generate(const Vector3& point) const {
+        Vector3 scaledPoint = point * scale_;  // Create scaled copy
+        
         switch (type_) {
         case NoiseType::Perlin:
-            return PerlinNoise(point * scale_) * strength_;
+            return PerlinNoise(scaledPoint) * strength_;
         case NoiseType::FractalBrownianMotion:
-            return FractalBrownianMotion(point * scale_) * strength_;
+            return FractalBrownianMotion(scaledPoint) * strength_;
         case NoiseType::None:
         default:
             return 0.0f;
@@ -137,13 +139,14 @@ private:
     float strength_;  // Strength of the noise
 
     // Computes Perlin noise for a given point
-    float PerlinNoise(Vector3 point) const {
+    float PerlinNoise(const Vector3& point) const {
+        // Simple procedural noise - could be improved with real Perlin noise
         return sin(point.x) * cos(point.y) * sin(point.z);
     }
 
     // Computes fractal Brownian motion (FBM) for a given point
-    float FractalBrownianMotion(Vector3 point) const {
-        return fbm_4(point);
+    float FractalBrownianMotion(const Vector3& point) const {
+        return fbm_4(point);  // fbm_4 now takes copy, so this is safe
     }
 };
 

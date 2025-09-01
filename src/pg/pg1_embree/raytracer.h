@@ -16,11 +16,39 @@
 #include "vector4.h"
 
 /*! \class RayTracer
-\brief General ray tracer class.
+\brief Hybrid Ray Tracer with dual rendering pipeline.
 
-This class implements a ray tracer capable of rendering 3D scenes using ray tracing and ray marching techniques.
-It supports features such as volumetric rendering, shading models, and camera movement.
+This class implements a sophisticated hybrid renderer that combines two complementary
+rendering techniques for maximum flexibility and visual quality:
 
+1. SURFACE RAY TRACING (Intel Embree):
+   - Uses Intel Embree library for high-performance triangle mesh rendering
+   - BVH (Bounding Volume Hierarchy) acceleration structure
+   - Supports traditional polygon-based models (OBJ files)
+   - Standard surface shading: Lambert, Phong, transparent materials
+   - Hardware-optimized ray-triangle intersections
+
+2. VOLUMETRIC RENDERING (SDF Ray Marching):
+   - Custom SDF (Signed Distance Function) ray marching implementation
+   - Procedural volumetric shapes with noise
+   - Supports both surface (sphere tracing) and volume (ray marching) modes
+   - Beer-Lambert absorption for realistic volumetric lighting
+   - Smooth unions and CSG operations on procedural shapes
+
+The two pipelines are composited using alpha blending to create the final image.
+
+Key Features:
+- Real-time interactive preview with ImGui controls
+- Supersampling anti-aliasing support
+- Environment mapping with cubemaps
+- Shadow ray optimization
+- Recursive reflection/refraction rays
+- Camera animation and manual controls
+- Video export functionality
+
+\author Michal Maslik
+\version 1.0
+\date 2024
 */
 
 // Represents a transformation in 3D space, including position, scale, and rotation
@@ -32,7 +60,7 @@ struct Transform {
 
 // Stores information about a 3D model, including its file path and transformation
 struct ModelInfo {
-    std::string filePath; // Path to the model file
+    std::string filePath; // Path to the OBJ model file
     Transform transform;  // Transformation to apply to the model
 };
 
@@ -40,93 +68,155 @@ struct ModelInfo {
 class RayTracer : public SimpleGuiDX11
 {
 public:
-    // Constructor: Initializes the ray tracer with the given parameters
+    //=============================================================================
+    // INITIALIZATION & CLEANUP
+    //=============================================================================
+    
+    // Constructor: Initializes the hybrid ray tracer with the given parameters
     RayTracer(const int width, const int height,
         const float fovY, const Vector3& viewFrom, const Vector3& viewAt, const Vector3& lightOrigin,
         const char* config = "threads=0,verbose=3");
 
-    // Destructor: Cleans up allocated resources
+    // Destructor: Cleans up allocated resources (Embree, shapes, materials, cubemap)
     ~RayTracer();
 
-    // Initializes the Embree device and scene
+    //=============================================================================
+    // INTEL EMBREE MANAGEMENT (Surface Ray Tracing)
+    //=============================================================================
+    
+    // Initializes the Intel Embree device and scene for triangle mesh ray tracing
     int InitDeviceAndScene(const char* config);
 
-    // Releases the Embree device and scene
+    // Releases the Intel Embree device and scene
     int ReleaseDeviceAndScene();
 
-    // Loads a scene with models, volumetric shapes, and a cubemap
+    //=============================================================================
+    // SCENE LOADING & SETUP
+    //=============================================================================
+    
+    // Loads a complete scene with polygon models, volumetric shapes, and environment map
     void LoadScene(
-        const std::vector<ModelInfo>& models, // List of models to load
-        const std::vector<Shape*>& shapes,   // List of volumetric shapes
-        const char* cubeMapFileNames[6]      // File paths for the cubemap textures
+        const std::vector<ModelInfo>& models, // List of OBJ models for surface rendering
+        const std::vector<Shape*>& shapes,    // List of SDF shapes for volumetric rendering
+        const char* cubeMapFileNames[6]       // File paths for the cubemap textures
     );
 
-    // Loads a single 3D model and applies the given transformation
+    // Loads a single 3D model (OBJ) and applies the given transformation
     void LoadModel(const std::string& fileName, const Transform& transform = Transform());
 
-    // Checks if a point is visible from a light source
+    //=============================================================================
+    // RAY TRACING UTILITIES
+    //=============================================================================
+    
+    // Checks if a point is visible from a light source (shadow ray test)
     bool IsHitPointVisible(const Vector3& hitPoint, const Vector3& lightPoint);
 
-    // Computes the color of a single pixel in the rendered image
+    //=============================================================================
+    // RENDERING PIPELINE
+    //=============================================================================
+    
+    // Computes the color of a single pixel using hybrid rendering pipeline
     Color4f GetPixel(const int x, const int y, const float t = 0.0f) override;
 
-    // Moves the camera in a circular path around the target point
+    // Animates camera in circular orbit around target point
     void MoveCamera() override;
 
-    // Traces a ray through the scene and determines the color at the intersection point
+    // Main ray tracing function: Traces a ray through the scene using Intel Embree
     Vector3 TraceRay(const RTCRay& ray, const float n_1 = 1.0f, const int depth = 0, const int maxDepth = 10);
 
-    // Shading models
-    Vector3 NormalShader(const Vector3& normalVector); // Visualizes the normal vector as a color
-    Vector3 LambertShader(const Material& material, const Coord2f& texCoord, const Vector3& hitPoint, const Vector3& normalVector); // Diffuse shading
-    Vector3 PhongShader(const Material& material, const Coord2f& texCoord, const Vector3& hitPoint, const Vector3& normalVector, const Vector3& directionVector, const int depth); // Specular highlights
-    Vector3 TransparentShader(const RTCRay& ray, const Vector3& hitPoint, const Vector3& normalVector, const Vector3& directionVector, const Material& material, const float n_1, const int depth); // Refraction and reflection
+    //=============================================================================
+    // SURFACE SHADING MODELS (for Embree-traced triangle meshes)
+    //=============================================================================
+    
+    Vector3 NormalShader(const Vector3& normalVector); // Visualizes normals as RGB colors
+    Vector3 LambertShader(const Material& material, const Coord2f& texCoord, const Vector3& hitPoint, const Vector3& normalVector); // Diffuse-only shading
+    Vector3 PhongShader(const Material& material, const Coord2f& texCoord, const Vector3& hitPoint, const Vector3& normalVector, const Vector3& directionVector, const int depth); // Diffuse + specular highlights
+    Vector3 TransparentShader(const RTCRay& ray, const Vector3& hitPoint, const Vector3& normalVector, const Vector3& directionVector, const Material& material, const float n_1, const int depth); // Glass with Fresnel reflections
 
-    // Volumetric rendering
-    Vector4 VolumetricRender(const RTCRay& ray); // Handles volumetric rendering
-    Vector4 VolumetricEffect(const RTCRay& ray); // Computes volumetric effects using ray marching
-    Vector4 SurfaceEffect(const RTCRay& ray);   // Computes surface effects for volumetric shapes
+    //=============================================================================
+    // VOLUMETRIC RENDERING (SDF-based procedural shapes)
+    //=============================================================================
+    
+    // Dispatcher: Chooses between surface (sphere tracing) and volume (ray marching) rendering
+    Vector4 VolumetricRender(const RTCRay& ray);
+    
+    // RAY MARCHING: True volumetric rendering with Beer-Lambert absorption
+    Vector4 VolumetricEffect(const RTCRay& ray);
+    
+    // SPHERE TRACING: Surface-only rendering of SDF shapes using adaptive stepping
+    Vector4 SurfaceEffect(const RTCRay& ray);
 
-    // Renders the user interface for controlling ray tracing parameters
+    //=============================================================================
+    // USER INTERFACE
+    //=============================================================================
+    
+    // Renders the ImGui interface for controlling ray tracing parameters
     int Ui() override;
 
-    // Public settings for ray tracing and rendering
-    bool useNoise_{ true };               // Enables or disables noise
-    float noiseScale_{ 0.7f };            // Scale of the noise
-    float noiseStrength_{ 3.0f };         // Strength of the noise
-    float smoothFactor_{ 1.0f };          // Smoothness factor for volumetric shapes
+    //=============================================================================
+    // RENDERING SETTINGS
+    //=============================================================================
 
-    bool rayMarching_{ false };           // Enables or disables ray marching
-    float stepSize_{ 0.01f };             // Step size for ray marching
-    float maxDistance_{ 50.0f };          // Maximum distance for ray marching
-    int maxSteps_ = static_cast<int>(maxDistance_ / stepSize_); // Maximum number of steps for ray marching
-    float absorptionCoefficient_{ 0.5f }; // Absorption coefficient for volumetric rendering
-    float lightAttenuationFactor_{ 1.65f }; // Light attenuation factor
-    float volumetricAlbedo_[3]{ 0.0f, 0.0f, 0.0f }; // Albedo for volumetric rendering
-    Vector3 volumetricAlbedoVec_{ 0.0f, 0.0f, 0.0f }; // Albedo as a vector
+    // === SDF & NOISE PARAMETERS ===
+    bool useNoise_{ true };               // Enable/disable procedural noise on SDF shapes
+    float noiseScale_{ 0.7f };            // Spatial scale of the noise pattern
+    float noiseStrength_{ 3.0f };         // Amplitude/strength of noise displacement
+    float smoothFactor_{ 1.0f };          // Smoothness factor for SDF boolean operations
 
-    bool sampling_{ false };              // Enables or disables supersampling
+    // === VOLUMETRIC RENDERING PARAMETERS ===
+    bool rayMarching_{ false };           // true = Volume mode, false = Surface mode
+    float stepSize_{ 0.01f };             // Step size for ray marching (smaller = higher quality)
+    float maxDistance_{ 50.0f };          // Maximum ray marching distance
+    int maxSteps_ = static_cast<int>(maxDistance_ / stepSize_); // Maximum number of ray marching steps
+    float absorptionCoefficient_{ 0.5f }; // Beer-Lambert absorption coefficient
+    float lightAttenuationFactor_{ 1.65f }; // Distance-based light attenuation exponent
+    
+    // Volumetric material properties
+    float volumetricAlbedo_[3]{ 0.0f, 0.0f, 0.0f };    // Albedo color picker for UI
+    Vector3 volumetricAlbedoVec_{ 0.0f, 0.0f, 0.0f };  // Volumetric albedo as Vector3
 
-    bool backgroundEnabled_{ false };    // Enables or disables the background
-    float backgroundColor_[3]{ 1.0f, 1.0f, 1.0f }; // Background color
-    Vector3 backgroundColorVec_{ 1.0f, 1.0f, 1.0f }; // Background color as a vector
+    // === ANTI-ALIASING ===
+    bool sampling_{ false };              // Enable/disable 4x4 supersampling anti-aliasing
 
-    bool cameraMovementEnabled_{ true }; // Enables or disables camera movement
-    float cameraX_{ 0.0f };              // Camera position along the X-axis
-    float cameraY_{ 0.0f };              // Camera position along the Y-axis
-    float cameraZ_{ 0.0f };              // Camera position along the Z-axis
+    // === BACKGROUND SETTINGS ===
+    bool backgroundEnabled_{ false };     // true = use cubemap, false = solid color
+    float backgroundColor_[3]{ 1.0f, 1.0f, 1.0f };     // Background color picker for UI
+    Vector3 backgroundColorVec_{ 1.0f, 1.0f, 1.0f };   // Background color as Vector3
+
+    // === CAMERA ANIMATION ===
+    bool cameraMovementEnabled_{ true };  // Enable/disable automatic camera orbit animation
+    float cameraX_{ 0.0f };               // Manual camera X position
+    float cameraY_{ 0.0f };               // Manual camera Y position
+    float cameraZ_{ 0.0f };               // Manual camera Z position
 
 private:
-    // Private members for managing the scene and rendering
-    std::vector<Shape*> volumetricShapes_; // List of volumetric shapes in the scene
-    std::vector<Surface*> surfaces_;       // List of surfaces in the scene
-    std::vector<Material*> materials_;     // List of materials in the scene
-    CubeMap* cubemap_ = nullptr;           // Cubemap for the scene
+    //=============================================================================
+    // SCENE DATA
+    //=============================================================================
+    
+    // VOLUMETRIC SHAPES: Procedural SDF-based shapes for ray marching
+    std::vector<Shape*> volumetricShapes_;
+    
+    // SURFACE GEOMETRY: Triangle meshes loaded from OBJ files for Embree
+    std::vector<Surface*> surfaces_;       // Triangle mesh surfaces
+    std::vector<Material*> materials_;     // Materials associated with surfaces
+    
+    // ENVIRONMENT MAPPING
+    CubeMap* cubemap_ = nullptr;           // Environment map for background and reflections
 
-    RTCDevice device_;                     // Embree device
-    RTCScene scene_;                       // Embree scene
-    Camera camera_;                        // Camera for the scene
-    Light light_;                          // Light source for the scene
+    //=============================================================================
+    // INTEL EMBREE RAY TRACING ENGINE
+    //=============================================================================
+    
+    RTCDevice device_;                     // Embree device handle
+    RTCScene scene_;                       // Embree scene containing BVH acceleration structure
+    
+    //=============================================================================
+    // SCENE COMPONENTS
+    //=============================================================================
+    
+    Camera camera_;                        // Pin-hole camera for ray generation
+    Light light_;                          // Point light source for illumination
 };
 
 #endif

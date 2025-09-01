@@ -231,21 +231,23 @@ int tutorial_3(const char* config)
 	};
 
 	std::vector<ModelInfo> models = {
+		//ModelInfo{"../../../data/sphere.obj", Transform{Vector3(0.0f, 0.0f, 0.0f), Vector3(1.0f, 1.0f, 1.0f), Vector3(0.0f, 0.0f, 0.0f)}},
+
 		//ModelInfo{"../../../data/plane/plane.obj", Transform{Vector3(0.0f, 0.0f, 0.0f), Vector3(1.0f, 1.0f, 1.0f), Vector3(0.0f, 0.0f, 0.0f)}},
 		//ModelInfo{"../../../data/geosphere.obj", Transform{Vector3(0.0f, 0.0f, 0.0f), Vector3(3.0f, 3.0f, 3.0f), Vector3(0.0f, 0.0f, 0.0f)}},
 	};
 
 	SmoothUnion* smoothUnion = new SmoothUnion({
 		new Sphere(Vector3(0.0f, 0.0f, 1.0f), 4.0f, 1.0f),
-		//new Sphere(Vector3(-8.0f, 2.0f, -1.0f), 5.6f, 1.0f),
+		new Sphere(Vector3(-8.0f, 2.0f, -1.0f), 5.6f, 1.0f),
 		 //new Sphere(Vector3(-4.0f, 6.0f, 3.0f), 5.6f, 3.0f),
 		 //new Sphere(Vector3(0.0f, 0.0f, 0.0f), 8.0f, 3.0f),
 		new Plane(0.01f)
 		}, Noise(Noise::NoiseType::FractalBrownianMotion, 1.0f / 3.2f, 7.0f));
 
 	std::vector<Shape*> volumetricShapes = {
-		//smoothUnion,
-		new Sphere(Vector3(0.0f, 0.0f, 0.0f), 4.0f, 1.0f, Noise(Noise::NoiseType::FractalBrownianMotion, 0.7f, 3.0f))
+		smoothUnion,
+		//new Sphere(Vector3(0.0f, 0.0f, 0.0f), 4.0f, 1.0f, Noise(Noise::NoiseType::FractalBrownianMotion, 0.7f, 3.0f))
 	};
 
 	rayTracer.LoadScene(models, volumetricShapes, cubeMapFileNames);
