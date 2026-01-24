@@ -8,7 +8,7 @@
 #include <opencv2/opencv.hpp>
 
 
-SimpleGuiDX11::SimpleGuiDX11( const int width, const int height)
+SimpleGuiDX11::SimpleGuiDX11(const int width, const int height)
 {
 	width_ = width;
 	height_ = height;
@@ -19,23 +19,23 @@ SimpleGuiDX11::SimpleGuiDX11( const int width, const int height)
 int SimpleGuiDX11::Init()
 {
 	// Create application window
-	wc_ = { sizeof( WNDCLASSEX ), CS_CLASSDC, s_WndProc, 0L, 0L,
-		GetModuleHandle( NULL ), NULL, NULL, NULL, NULL, _T( "ImGui Example" ), NULL };
-	RegisterClassEx( &wc_ );
-	hwnd_ = CreateWindow( _T( "ImGui Example" ), _T( "PG1 Ray Tracer" ),
-		WS_OVERLAPPEDWINDOW, 100, 100, 1280, 800, NULL, NULL, wc_.hInstance, this );
+	wc_ = { sizeof(WNDCLASSEX), CS_CLASSDC, s_WndProc, 0L, 0L,
+		GetModuleHandle(NULL), NULL, NULL, NULL, NULL, _T("ImGui Example"), NULL };
+	RegisterClassEx(&wc_);
+	hwnd_ = CreateWindow(_T("ImGui Example"), _T("PG1 Ray Tracer"),
+		WS_OVERLAPPEDWINDOW, 100, 100, 1280, 800, NULL, NULL, wc_.hInstance, this);
 
 	// Initialize Direct3D
-	if ( CreateDeviceD3D( hwnd_ ) < 0 )
+	if (CreateDeviceD3D(hwnd_) < 0)
 	{
 		CleanupDeviceD3D();
-		UnregisterClass( _T( "ImGui Example" ), wc_.hInstance );
+		UnregisterClass(_T("ImGui Example"), wc_.hInstance);
 		return S_OK;
 	}
 
 	// Show the window
-	ShowWindow( hwnd_, SW_SHOWDEFAULT );
-	UpdateWindow( hwnd_ );
+	ShowWindow(hwnd_, SW_SHOWDEFAULT);
+	UpdateWindow(hwnd_);
 
 	// Setup Dear ImGui binding
 	IMGUI_CHECKVERSION();
@@ -45,14 +45,14 @@ int SimpleGuiDX11::Init()
 
 	// Initialize helper Platform and Renderer bindings
 	// (here we are using imgui_impl_win32 and imgui_impl_dx11)
-	ImGui_ImplWin32_Init( hwnd_ );
-	ImGui_ImplDX11_Init( g_pd3dDevice, g_pd3dDeviceContext );
+	ImGui_ImplWin32_Init(hwnd_);
+	ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
 	// Setup style
 	ImGui::StyleColorsDark();
 	//ImGui::StyleColorsClassic();
 
-	tex_data_ = new float[width_ * height_ * 4 * sizeof( float )];	
+	tex_data_ = new float[width_ * height_ * 4 * sizeof(float)];
 	CreateTexture();
 
 	return 0;
@@ -61,7 +61,7 @@ int SimpleGuiDX11::Init()
 SimpleGuiDX11::~SimpleGuiDX11()
 {
 	Cleanup();
-	 
+
 	delete[] tex_data_;
 	tex_data_ = nullptr;
 }
@@ -73,8 +73,8 @@ int SimpleGuiDX11::Cleanup()
 	ImGui::DestroyContext();
 
 	CleanupDeviceD3D();
-	DestroyWindow( hwnd_ );
-	UnregisterClass( _T( "ImGui Example" ), wc_.hInstance );
+	DestroyWindow(hwnd_);
+	UnregisterClass(_T("ImGui Example"), wc_.hInstance);
 
 	// Vytvoríme video z uložených snímkov
 	std::string ffmpeg_cmd = "ffmpeg -framerate 60 -i frames/frame_%06d.ppm -c:v libx264 -crf 0 -preset veryslow -pix_fmt yuv420p frames/output.mp4";
@@ -89,7 +89,7 @@ int SimpleGuiDX11::Ui()
 	return 0;
 }
 
-Color4f SimpleGuiDX11::GetPixel( const int x, const int y, const float t )
+Color4f SimpleGuiDX11::GetPixel(const int x, const int y, const float t)
 {
 	return Color4f{ 1.0f, 0.0f, 1.0f, 1.0f };
 }
@@ -101,77 +101,110 @@ void SimpleGuiDX11::Producer()
 	float t = 0.0f; // time
 	auto t0 = std::chrono::high_resolution_clock::now();
 
-	// refinenment loop
-	for (float t = 0.0f; t < 1e+3 && !finish_request_.load(std::memory_order_acquire); t += float(1e-1))
+	// Initialize FPS timing
+	lastFrameTime_ = std::chrono::high_resolution_clock::now();
+	fpsUpdateTime_ = lastFrameTime_;
+	isFPSInitialized_ = true;
+
 	while (!finish_request_.load(std::memory_order_acquire))
 	{
-		auto t1 = std::chrono::high_resolution_clock::now();
-		std::chrono::duration<float> dt = t1 - t0;
-		t += dt.count();
-		t0 = t1;
+		// Check if rendering is paused
+		bool should_render = !IsRenderingPaused();
 
-		MoveCamera();
-
-		// compute rendering
-		#pragma omp parallel for
-		for (int y = 0; y < height_; ++y)
-		{
-			for (int x = 0; x < width_; ++x)
-			{
-				const Color4f pixel = GetPixel(x, y, t);
-				const int offset = (y * width_ + x) * 4;
-
-				local_data[offset] = pixel.r;
-				local_data[offset + 1] = pixel.g;
-				local_data[offset + 2] = pixel.b;
-				local_data[offset + 3] = pixel.a;
-				//pixel.copy( local_data[offset] );
-			}
+		// Check for single frame request when paused
+		if (IsRenderingPaused() && IsSingleFrameRequested()) {
+			should_render = true;
+			ClearSingleFrameRequest();
 		}
 
-		// write rendering results
-		{
-			std::lock_guard<std::mutex> lock(tex_data_lock_);
-			memcpy(tex_data_, local_data, width_ * height_ * 4 * sizeof(float));
-		} // lock release
+		if (should_render) {
+			auto t1 = std::chrono::high_resolution_clock::now();
+			std::chrono::duration<float> dt = t1 - t0;
+			t += dt.count();
+			t0 = t1;
 
-		// Uložíme snímok
-		{
-			// Vytvoríme adresár pre snímky ak neexistuje
-			std::experimental::filesystem::create_directory("frames");
+			// Update FPS calculation
+			UpdateFPS();
 
-			// Vytvoríme názov súboru s leading zeros
-			std::stringstream filename;
-			filename << "frames/frame_" << std::setw(6) << std::setfill('0') << frameCount_ << ".ppm";
-			std::cout << "Saving frame: " << filename.str() << std::endl;
+			// Only move camera if not paused
+			if (!IsRenderingPaused()) {
+				MoveCamera();
+			}
 
-			// Otvoríme súbor pre zápis
-			std::ofstream file(filename.str(), std::ios::binary);
-			if (file.is_open()) {
-				// Zapíšeme PPM hlavičku
-				file << "P6\n" << width_ << " " << height_ << "\n255\n";
+			// compute rendering
+#pragma omp parallel for
+			for (int y = 0; y < height_; ++y)
+			{
+				for (int x = 0; x < width_; ++x)
+				{
+					const Color4f pixel = GetPixel(x, y, t);
+					const int offset = (y * width_ + x) * 4;
 
-				// Prejdeme všetky pixely a zapíšeme ich
-				for (int y = 0; y < height_; ++y) {
-					for (int x = 0; x < width_; ++x) {
-						const int offset = (y * width_ + x) * 4;
-						// Konvertujeme na 8-bit hodnoty a zapíšeme
-						unsigned char r = static_cast<unsigned char>(local_data[offset] * 255.0f);
-						unsigned char g = static_cast<unsigned char>(local_data[offset + 1] * 255.0f);
-						unsigned char b = static_cast<unsigned char>(local_data[offset + 2] * 255.0f);
-						file.write(reinterpret_cast<const char*>(&r), 1);
-						file.write(reinterpret_cast<const char*>(&g), 1);
-						file.write(reinterpret_cast<const char*>(&b), 1);
-					}
+					local_data[offset] = pixel.r;
+					local_data[offset + 1] = pixel.g;
+					local_data[offset + 2] = pixel.b;
+					local_data[offset + 3] = pixel.a;
 				}
 			}
-			frameCount_++;  // inkrementujeme počet snímkov
+
+			// write rendering results
+			{
+				std::lock_guard<std::mutex> lock(tex_data_lock_);
+				memcpy(tex_data_, local_data, width_ * height_ * 4 * sizeof(float));
+			} // lock release
+
+			// Save frame only when actively rendering
+			if (!IsRenderingPaused()) {
+				// Frame saving code (existing frame saving logic)
+				std::experimental::filesystem::create_directory("frames");
+
+				std::stringstream filename;
+				filename << "frames/frame_" << std::setw(6) << std::setfill('0') << frameCount_ << ".ppm";
+
+				std::ofstream file(filename.str(), std::ios::binary);
+				if (file.is_open()) {
+					file << "P6\n" << width_ << " " << height_ << "\n255\n";
+
+					for (int y = 0; y < height_; ++y) {
+						for (int x = 0; x < width_; ++x) {
+							const int offset = (y * width_ + x) * 4;
+							unsigned char r = static_cast<unsigned char>(local_data[offset] * 255.0f);
+							unsigned char g = static_cast<unsigned char>(local_data[offset + 1] * 255.0f);
+							unsigned char b = static_cast<unsigned char>(local_data[offset + 2] * 255.0f);
+							file.write(reinterpret_cast<const char*>(&r), 1);
+							file.write(reinterpret_cast<const char*>(&g), 1);
+							file.write(reinterpret_cast<const char*>(&b), 1);
+						}
+					}
+				}
+				frameCount_++;
+			}
+		}
+		else {
+			// When paused, sleep briefly to avoid busy waiting
+			std::this_thread::sleep_for(std::chrono::milliseconds(16)); // ~60 FPS check rate
 		}
 	}
 
 	delete[] local_data;
 }
 
+void SimpleGuiDX11::UpdateFPS() {
+	if (!isFPSInitialized_) return;
+
+	auto currentTime = std::chrono::high_resolution_clock::now();
+	framesSinceLastUpdate_++;
+
+	// Update FPS every 0.5 seconds
+	std::chrono::duration<float> timeSinceUpdate = currentTime - fpsUpdateTime_;
+	if (timeSinceUpdate.count() >= 0.5f) {
+		currentFPS_ = framesSinceLastUpdate_ / timeSinceUpdate.count();
+		framesSinceLastUpdate_ = 0;
+		fpsUpdateTime_ = currentTime;
+	}
+
+	lastFrameTime_ = currentTime;
+}
 int SimpleGuiDX11::width() const
 {
 	return width_;
@@ -185,23 +218,23 @@ int SimpleGuiDX11::height() const
 int SimpleGuiDX11::MainLoop()
 {
 	// start image producing threads
-	std::thread producer_thread( &SimpleGuiDX11::Producer, this );
-	BOOL r = SetThreadPriority( producer_thread.native_handle(), THREAD_PRIORITY_BELOW_NORMAL );
+	std::thread producer_thread(&SimpleGuiDX11::Producer, this);
+	BOOL r = SetThreadPriority(producer_thread.native_handle(), THREAD_PRIORITY_BELOW_NORMAL);
 
 	// and enter message loop
 	MSG msg;
-	ZeroMemory( &msg, sizeof( msg ) );
-	while ( msg.message != WM_QUIT )
+	ZeroMemory(&msg, sizeof(msg));
+	while (msg.message != WM_QUIT)
 	{
 		// Poll and handle messages (inputs, window resize, etc.)
 		// You can read the io.WantCaptureMouse, io.WantCaptureKeyboard flags to tell if dear imgui wants to use your inputs.
 		// - When io.WantCaptureMouse is true, do not dispatch mouse input data to your main application.
 		// - When io.WantCaptureKeyboard is true, do not dispatch keyboard input data to your main application.
 		// Generally you may always pass all inputs to dear imgui, and hide them from your application based on those two flags.
-		if ( PeekMessage( &msg, NULL, 0U, 0U, PM_REMOVE ) )
+		if (PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE))
 		{
-			TranslateMessage( &msg );
-			DispatchMessage( &msg );
+			TranslateMessage(&msg);
+			DispatchMessage(&msg);
 			continue;
 		}
 
@@ -214,33 +247,45 @@ int SimpleGuiDX11::MainLoop()
 
 		{
 			D3D11_MAPPED_SUBRESOURCE mapped;
-			ZeroMemory( &mapped, sizeof( mapped ) );
-			HRESULT hr = g_pd3dDeviceContext->Map( tex_id_, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped ); // D3D11_MAP_WRITE, D3D11_MAP_WRITE_DISCARD
+			ZeroMemory(&mapped, sizeof(mapped));
+			HRESULT hr = g_pd3dDeviceContext->Map(tex_id_, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped); // D3D11_MAP_WRITE, D3D11_MAP_WRITE_DISCARD
 
 			{
-				std::lock_guard<std::mutex> lock( tex_data_lock_ );
-				memcpy( mapped.pData, tex_data_, mapped.RowPitch * height_ );
+				std::lock_guard<std::mutex> lock(tex_data_lock_);
+				memcpy(mapped.pData, tex_data_, mapped.RowPitch * height_);
 			}
-			
-			g_pd3dDeviceContext->Unmap( tex_id_, 0 );
+
+			g_pd3dDeviceContext->Unmap(tex_id_, 0);
 		}
 
-		ImGui::Begin( "Image", 0, ImGuiWindowFlags_NoResize );
-		ImGui::Image( ImTextureID( tex_view_ ), ImVec2( float( width_ ), float( height_ ) ) );
+		// Úplne fixované Image okno v ľavom hornom rohu
+		ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always); // Vždy v ľavom hornom rohu
+		ImGui::SetNextWindowSize(ImVec2(float(width_ + 16), float(height_ + 35)), ImGuiCond_Always); // Vždy rovnaká veľkosť
+
+		ImGui::Begin("Image", 0,
+			ImGuiWindowFlags_NoResize |
+			ImGuiWindowFlags_NoMove |
+			ImGuiWindowFlags_NoTitleBar |       // Odstráni title bar
+			ImGuiWindowFlags_NoScrollbar |
+			ImGuiWindowFlags_NoScrollWithMouse |
+			ImGuiWindowFlags_NoCollapse
+		);
+
+		ImGui::Image(ImTextureID(tex_view_), ImVec2(float(width_), float(height_)));
 		ImGui::End();
 
 		//ImGui_ImplDX11_RenderDrawData()
 		// Rendering
 		ImGui::Render();
-		g_pd3dDeviceContext->OMSetRenderTargets( 1, &g_mainRenderTargetView, NULL );
-		const FLOAT clear_color[4] = { 0.45f, 0.55f, 0.60f, 1.00f };		
-		g_pd3dDeviceContext->ClearRenderTargetView( g_mainRenderTargetView, ( float* )&clear_color );
-		ImGui_ImplDX11_RenderDrawData( ImGui::GetDrawData() );
-		
-		g_pSwapChain->Present( ( ( vsync_ ) ? 1 : 0 ), 0 ); // present with or without vsync
+		g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, NULL);
+		const FLOAT clear_color[4] = { 0.45f, 0.55f, 0.60f, 1.00f };
+		g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, (float*)&clear_color);
+		ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+
+		g_pSwapChain->Present(((vsync_) ? 1 : 0), 0); // present with or without vsync
 	}
 
-	finish_request_.store( true, std::memory_order_release );
+	finish_request_.store(true, std::memory_order_release);
 	producer_thread.join();
 
 	return 0;
@@ -248,26 +293,26 @@ int SimpleGuiDX11::MainLoop()
 
 void SimpleGuiDX11::CreateRenderTarget()
 {
-	ID3D11Texture2D * pBackBuffer = nullptr;
-	g_pSwapChain->GetBuffer( 0, __uuidof( ID3D11Texture2D ), ( LPVOID * )&pBackBuffer );
-	g_pd3dDevice->CreateRenderTargetView( pBackBuffer, nullptr, &g_mainRenderTargetView );
+	ID3D11Texture2D* pBackBuffer = nullptr;
+	g_pSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (LPVOID*)&pBackBuffer);
+	g_pd3dDevice->CreateRenderTargetView(pBackBuffer, nullptr, &g_mainRenderTargetView);
 	pBackBuffer->Release();
 }
 
 void SimpleGuiDX11::CleanupRenderTarget()
 {
-	if ( g_mainRenderTargetView )
+	if (g_mainRenderTargetView)
 	{
 		g_mainRenderTargetView->Release();
 		g_mainRenderTargetView = nullptr;
 	}
 }
 
-HRESULT SimpleGuiDX11::CreateDeviceD3D( HWND hWnd )
+HRESULT SimpleGuiDX11::CreateDeviceD3D(HWND hWnd)
 {
 	// Setup swap chain
 	DXGI_SWAP_CHAIN_DESC sd;
-	ZeroMemory( &sd, sizeof( sd ) );
+	ZeroMemory(&sd, sizeof(sd));
 	sd.BufferCount = 2;
 	sd.BufferDesc.Width = 0;
 	sd.BufferDesc.Height = 0;
@@ -286,9 +331,9 @@ HRESULT SimpleGuiDX11::CreateDeviceD3D( HWND hWnd )
 	//createDeviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
 	D3D_FEATURE_LEVEL featureLevel;
 	const D3D_FEATURE_LEVEL featureLevelArray[2] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0 };
-	if ( D3D11CreateDeviceAndSwapChain( nullptr, D3D_DRIVER_TYPE_HARDWARE,
+	if (D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE,
 		nullptr, createDeviceFlags, featureLevelArray, 2, D3D11_SDK_VERSION,
-		&sd, &g_pSwapChain, &g_pd3dDevice, &featureLevel, &g_pd3dDeviceContext ) != S_OK )
+		&sd, &g_pSwapChain, &g_pd3dDevice, &featureLevel, &g_pd3dDeviceContext) != S_OK)
 	{
 		return E_FAIL;
 	}
@@ -302,19 +347,19 @@ void SimpleGuiDX11::CleanupDeviceD3D()
 {
 	CleanupRenderTarget();
 
-	if ( g_pSwapChain )
+	if (g_pSwapChain)
 	{
 		g_pSwapChain->Release();
 		g_pSwapChain = nullptr;
 	}
 
-	if ( g_pd3dDeviceContext )
+	if (g_pd3dDeviceContext)
 	{
 		g_pd3dDeviceContext->Release();
 		g_pd3dDeviceContext = nullptr;
 	}
 
-	if ( g_pd3dDevice )
+	if (g_pd3dDevice)
 	{
 		g_pd3dDevice->Release();
 		g_pd3dDevice = nullptr;
@@ -323,11 +368,11 @@ void SimpleGuiDX11::CleanupDeviceD3D()
 
 HRESULT SimpleGuiDX11::CreateTexture()
 {
-	if ( tex_id_ == nullptr )
+	if (tex_id_ == nullptr)
 	{
 		// set up texture description
 		D3D11_TEXTURE2D_DESC desc;
-		ZeroMemory( &desc, sizeof( desc ) );
+		ZeroMemory(&desc, sizeof(desc));
 		desc.Width = width_;
 		desc.Height = height_;
 		desc.MipLevels = 1;
@@ -342,25 +387,25 @@ HRESULT SimpleGuiDX11::CreateTexture()
 
 		// set up initial data description for the texture
 		D3D11_SUBRESOURCE_DATA initData;
-		ZeroMemory( &initData, sizeof( initData ) );
-		initData.pSysMem = ( void * )tex_data_;
-		initData.SysMemPitch = width_ * ( 4 * sizeof( float ) );
+		ZeroMemory(&initData, sizeof(initData));
+		initData.pSysMem = (void*)tex_data_;
+		initData.SysMemPitch = width_ * (4 * sizeof(float));
 		initData.SysMemSlicePitch = height_ * initData.SysMemPitch;
 
 		// create the texture
-		HRESULT hr = g_pd3dDevice->CreateTexture2D( &desc, &initData, &tex_id_ );
+		HRESULT hr = g_pd3dDevice->CreateTexture2D(&desc, &initData, &tex_id_);
 
 		//https://github.com/ocornut/imgui/issues/1877
 		//https://github.com/ocornut/imgui/issues/1265
 
 		// create a view of the texture
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
-		ZeroMemory( &srvDesc, sizeof( srvDesc ) );
+		ZeroMemory(&srvDesc, sizeof(srvDesc));
 		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
 			srvDesc.Texture2D.MostDetailedMip = 0;
 		srvDesc.Texture2D.MipLevels = desc.MipLevels;
 		srvDesc.Format = desc.Format;
-		hr = g_pd3dDevice->CreateShaderResourceView( tex_id_, &srvDesc, &tex_view_ );
+		hr = g_pd3dDevice->CreateShaderResourceView(tex_id_, &srvDesc, &tex_view_);
 
 		return hr;
 	}
@@ -368,69 +413,69 @@ HRESULT SimpleGuiDX11::CreateTexture()
 	return S_OK;
 }
 
-extern LRESULT ImGui_ImplWin32_WndProcHandler( HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam );
+extern LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-LRESULT SimpleGuiDX11::WndProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam )
+LRESULT SimpleGuiDX11::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-	if ( ImGui_ImplWin32_WndProcHandler( hWnd, msg, wParam, lParam ) )
+	if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
 		return true;
 
-	switch ( msg )
+	switch (msg)
 	{
 	case WM_SIZE:
-		if ( g_pd3dDevice != NULL && wParam != SIZE_MINIMIZED )
+		if (g_pd3dDevice != NULL && wParam != SIZE_MINIMIZED)
 		{
 			ImGui_ImplDX11_InvalidateDeviceObjects();
 			CleanupRenderTarget();
-			g_pSwapChain->ResizeBuffers( 0, ( UINT )LOWORD( lParam ), ( UINT )HIWORD( lParam ), DXGI_FORMAT_UNKNOWN, 0 );
+			g_pSwapChain->ResizeBuffers(0, (UINT)LOWORD(lParam), (UINT)HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
 			CreateRenderTarget();
 			ImGui_ImplDX11_CreateDeviceObjects();
 		}
 		return 0;
 	case WM_SYSCOMMAND:
-		if ( ( wParam & 0xfff0 ) == SC_KEYMENU ) // Disable ALT application menu
+		if ((wParam & 0xfff0) == SC_KEYMENU) // Disable ALT application menu
 			return 0;
 		break;
 	case WM_DESTROY:
-		PostQuitMessage( 0 );
+		PostQuitMessage(0);
 		return 0;
 	}
 
-	return DefWindowProc( hWnd, msg, wParam, lParam );
+	return DefWindowProc(hWnd, msg, wParam, lParam);
 }
 
 // https://blogs.msdn.microsoft.com/oldnewthing/20140203-00/?p=1893/
 LRESULT CALLBACK SimpleGuiDX11::s_WndProc(
-	HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam )
+	HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-	SimpleGuiDX11 * pThis = nullptr; // our "this" pointer will go here
+	SimpleGuiDX11* pThis = nullptr; // our "this" pointer will go here
 
-	if ( uMsg == WM_NCCREATE )
+	if (uMsg == WM_NCCREATE)
 	{
 		// Recover the "this" pointer which was passed as a parameter
 		// to CreateWindow(Ex).
-		LPCREATESTRUCT lpcs = reinterpret_cast<LPCREATESTRUCT>( lParam );
-		pThis = static_cast<SimpleGuiDX11*>( lpcs->lpCreateParams );
+		LPCREATESTRUCT lpcs = reinterpret_cast<LPCREATESTRUCT>(lParam);
+		pThis = static_cast<SimpleGuiDX11*>(lpcs->lpCreateParams);
 		// Put the value in a safe place for future use
-		SetWindowLongPtr( hwnd, GWLP_USERDATA,
-			reinterpret_cast<LONG_PTR>( pThis ) );
+		SetWindowLongPtr(hwnd, GWLP_USERDATA,
+			reinterpret_cast<LONG_PTR>(pThis));
 	}
 	else
 	{
 		// Recover the "this" pointer from where our WM_NCCREATE handler
 		// stashed it.
 		pThis = reinterpret_cast<SimpleGuiDX11*>(
-			GetWindowLongPtr( hwnd, GWLP_USERDATA ) );
+			GetWindowLongPtr(hwnd, GWLP_USERDATA));
 	}
 
-	if ( pThis )
+	if (pThis)
 	{
 		// Now that we have recovered our "this" pointer, let the
 		// member function finish the job.
-		return pThis->WndProc( hwnd, uMsg, wParam, lParam );
+		return pThis->WndProc(hwnd, uMsg, wParam, lParam);
 	}
 
 	// We don't know what our "this" pointer is, so just do the default
 	// thing. Hopefully, we didn't need to customize the behavior yet.
-	return DefWindowProc( hwnd, uMsg, wParam, lParam );
+	return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }

@@ -50,7 +50,7 @@ Vector3 Vector3::Abs() const
 
 Vector3 Vector3::Max(const float a) const
 {
-	return Vector3(max(x, a), max(y, a), max(z, a));
+	return Vector3(std::max(x, a), std::max(y, a), std::max(z, a));
 }
 
 float Vector3::DotProduct(const Vector3& v) const

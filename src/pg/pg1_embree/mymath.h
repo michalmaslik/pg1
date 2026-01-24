@@ -36,7 +36,7 @@ inline float rad2deg(const float x)
 }
 
 inline float clamp(const float x, const float x0 = 0.0f, const float x1 = 1.0f) {
-	return max(min(x, x1), x0);
+	return std::max(std::min(x, x1), x0);
 }
 
 #endif

@@ -233,10 +233,17 @@ int LoadOBJ(const char* file_name, std::vector<Surface*>& surfaces, std::vector<
 
 	// cesta k zadanému souboru
 	char path[128] = { "" };
-	const char* tmp = strrchr(file_name, '/');
+	/*const char* tmp = strrchr(file_name, '/');
 	if (tmp != NULL)
 	{
 		memcpy(path, file_name, sizeof(char) * (tmp - file_name + 1));
+	}*/
+	const char* tmp = strrchr(file_name, '\\');
+	if (tmp != NULL)
+	{
+		size_t len = tmp - file_name + 1;
+		memcpy(path, file_name, len);
+		path[len] = '\0';
 	}
 
 	// naètení celého souboru do pamìti

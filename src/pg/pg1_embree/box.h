@@ -26,7 +26,7 @@ public:
             return SDFNoise(point);
         }
         Vector3 q = (point - center_).Abs() - halfSize_;
-        return q.Max(0.0f).L2Norm() + min(max(q.x, max(q.y, q.z)), 0.0f);
+        return q.Max(0.0f).L2Norm() + std::min(std::max(q.x, std::max(q.y, q.z)), 0.0f);
     }
 
     // Computes the SDF with noise applied
@@ -37,7 +37,7 @@ public:
     // Computes the SDF with a specific noise configuration
     float SDFNoise(Vector3 point, const Noise& noise) const override {
         Vector3 q = (point - center_).Abs() - halfSize_;
-        float distance = q.Max(0.0f).L2Norm() + min(max(q.x, max(q.y, q.z)), 0.0f);
+        float distance = q.Max(0.0f).L2Norm() + std::min(std::max(q.x, std::max(q.y, q.z)), 0.0f);
         return distance + noise.Generate(point);
     }
 

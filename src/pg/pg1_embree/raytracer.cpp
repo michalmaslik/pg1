@@ -6,6 +6,7 @@
 #include <iostream>
 #include "smooth_union.h"
 #include <opencv2/opencv.hpp>
+#include <openvkl/devices/cpu/openvkl/device/openvkl.h>
 
 //=============================================================================
 // CONSTRUCTOR & DESTRUCTOR
@@ -15,35 +16,81 @@ RayTracer::RayTracer(const int width, const int height,
 	const float fovY, const Vector3& viewFrom, const Vector3& viewAt, const Vector3& lightOrigin,
 	const char* config) : SimpleGuiDX11(width, height)
 {
+	std::cout << "[RAY TRACER] Initializing Ray Tracer..." << std::endl;
+
 	// Initialize Intel Embree device and scene for surface ray tracing
-	InitDeviceAndScene(config);
+	if (InitDeviceAndScene(config) != S_OK) {
+		throw std::runtime_error("Failed to initialize Embree device and scene");
+	}
 
 	// Setup camera with specified parameters
 	camera_ = Camera(width, height, fovY, viewFrom, viewAt);
 
 	// Setup light source
 	light_ = Light(lightOrigin);
+
+	// Initialize fixed SDF scene
+	InitializeFixedSdfScene();
+
+	// Initialize camera orbital parameters
+	Vector3 currentViewFrom = camera_.GetViewFrom();
+
+	Vector3 direction = currentViewFrom - viewAt;
+	cameraDistance_ = direction.L2Norm();
+	cameraAzimuth_ = rad2deg(atan2(direction.y, direction.x));
+	cameraElevation_ = rad2deg(asin(direction.z / cameraDistance_));
+
+	while (cameraAzimuth_ < 0.0f) cameraAzimuth_ += 360.0f;
+
+	cameraX_ = currentViewFrom.x;
+	cameraY_ = currentViewFrom.y;
+	cameraZ_ = currentViewFrom.z;
+
+	// Initialize OpenVKL
+	if (!InitializeOpenVKL()) {
+		std::cerr << "[RAY TRACER WARNING] Failed to initialize OpenVKL" << std::endl;
+	}
+
+	// Load default cubemap (ak existujú súbory)
+	const char* cubeMapFileNames[6] = {
+		"../../../data/cube_map/posx.jpg",
+		"../../../data/cube_map/posy.jpg",
+		"../../../data/cube_map/posz.jpg",
+		"../../../data/cube_map/negx.jpg",
+		"../../../data/cube_map/negy.jpg",
+		"../../../data/cube_map/negz.jpg"
+	};
+
+	// Try to load cubemap, but don't fail if files don't exist
+	try {
+		cubemap_ = new CubeMap(cubeMapFileNames);
+		std::cout << "[RAY TRACER] Cubemap loaded successfully" << std::endl;
+	}
+	catch (const std::exception& e) {
+		std::cerr << "[RAY TRACER WARNING] Failed to load cubemap: " << e.what() << std::endl;
+		cubemap_ = nullptr;
+		backgroundEnabled_ = false; // Disable background if cubemap failed to load
+	}
+
+	std::cout << "[RAY TRACER] Ray Tracer initialized successfully" << std::endl;
 }
 
 RayTracer::~RayTracer()
 {
-	// Cleanup volumetric shapes (SDF-based)
-	for (auto shape : volumetricShapes_) {
-		delete shape;
+	// Cleanup OpenVKL resources first
+	CleanupOpenVKL();
+
+	// Cleanup fixed SDF scene
+	if (fixedSdfScene_) {
+		delete fixedSdfScene_;
+		fixedSdfScene_ = nullptr;
 	}
+
+	// Clean volumetric shapes vector (now contains only the fixed scene)
 	volumetricShapes_.clear();
 
-	// Cleanup surface geometry (polygonal meshes)
-	for (auto surface : surfaces_) {
-		delete surface;
-	}
-	surfaces_.clear();
-
-	// Cleanup materials
-	for (auto material : materials_) {
-		delete material;
-	}
-	materials_.clear();
+	// Cleanup surface geometry and materials
+	ClearSurfaceModels();
 
 	// Cleanup environment map
 	delete cubemap_;
@@ -60,17 +107,31 @@ RayTracer::~RayTracer()
 
 int RayTracer::InitDeviceAndScene(const char* config)
 {
-	// Create Intel Embree device - this handles BVH construction and ray-triangle intersections
+	std::cout << "[RAY TRACER] Initializing Embree device..." << std::endl;
+
+	// Create Intel Embree device
 	device_ = rtcNewDevice(config);
 	error_handler(nullptr, rtcGetDeviceError(device_), "Unable to create a new device.\n");
 	rtcSetDeviceErrorFunction(device_, error_handler, nullptr);
 
 	// Verify triangle geometry support
 	ssize_t triangleSupported = rtcGetDeviceProperty(device_, RTC_DEVICE_PROPERTY_TRIANGLE_GEOMETRY_SUPPORTED);
+	if (!triangleSupported) {
+		std::cerr << "[RAY TRACER ERROR] Triangle geometry not supported!" << std::endl;
+		return E_FAIL;
+	}
 
-	// Create scene bound to the device - this will contain all triangle geometries
+	// Create scene bound to the device
 	scene_ = rtcNewScene(device_);
+	if (!scene_) {
+		std::cerr << "[RAY TRACER ERROR] Failed to create Embree scene!" << std::endl;
+		return E_FAIL;
+	}
 
+	// Commit empty scene (this is safe and allows ray tracing calls)
+	rtcCommitScene(scene_);
+
+	std::cout << "[RAY TRACER] Embree device and scene initialized successfully" << std::endl;
 	return S_OK;
 }
 
@@ -165,10 +226,10 @@ void RayTracer::LoadModel(const std::string& fileName, const Transform& transfor
 
 		// Commit geometry changes to Embree
 		rtcCommitGeometry(mesh);
-		
+
 		// Attach geometry to scene and get geometry ID
 		unsigned int geom_id = rtcAttachGeometry(scene_, mesh);
-		
+
 		// Release geometry handle (scene holds reference)
 		rtcReleaseGeometry(mesh);
 	}
@@ -217,6 +278,11 @@ RTCRay MakeSecondaryRay(const Vector3& origin, const Vector3& dir) {
 }
 
 bool RayTracer::IsHitPointVisible(const Vector3& hitPoint, const Vector3& lightPoint) {
+	// If no surface geometry is loaded, assume point is always visible
+	if (surfaces_.empty()) {
+		return true;
+	}
+
 	// Create shadow ray from hit point to light
 	Vector3 l = lightPoint - hitPoint;
 	float dist = l.L2Norm();
@@ -248,7 +314,7 @@ bool RayTracer::IsHitPointVisible(const Vector3& hitPoint, const Vector3& lightP
 	rtcInitIntersectContext(&context);
 	rtcIntersect1(scene_, &context, &rayHit);
 
-	// Return true if no geometry blocks the light (shadow ray missed all geometry)
+	// Return true if no geometry blocks the light
 	return rayHit.hit.geomID == RTC_INVALID_GEOMETRY_ID;
 }
 
@@ -289,9 +355,9 @@ Vector3 RayTracer::NormalShader(const Vector3& normalVector) {
 	return (normalVector + Vector3(1.0f, 1.0f, 1.0f)) * 0.5f;
 }
 
-Vector3 RayTracer::LambertShader(const Material& material, const Coord2f& texCoord, 
+Vector3 RayTracer::LambertShader(const Material& material, const Coord2f& texCoord,
 	const Vector3& hitPoint, const Vector3& normalVector) {
-	
+
 	Vector3 outputColor;
 
 	// Get diffuse color from material or texture
@@ -320,9 +386,9 @@ Vector3 RayTracer::LambertShader(const Material& material, const Coord2f& texCoo
 	return outputColor;
 }
 
-Vector3 RayTracer::PhongShader(const Material& material, const Coord2f& texCoord, 
+Vector3 RayTracer::PhongShader(const Material& material, const Coord2f& texCoord,
 	const Vector3& hitPoint, const Vector3& normalVector, const Vector3& directionVector, const int depth) {
-	
+
 	Vector3 outputColor;
 
 	// Get diffuse color from material or texture
@@ -375,16 +441,16 @@ Vector3 RayTracer::PhongShader(const Material& material, const Coord2f& texCoord
 
 Vector3 t_b_l(const float length, const Vector3 attenuation) {
 	// Beer-Lambert Law: T = e^(-σ * d) for each color channel
-	Vector3 a = Vector3{ powf(exp(1.0f), -attenuation.x * length), 
-						 powf(exp(1.0f), -attenuation.y * length), 
+	Vector3 a = Vector3{ powf(exp(1.0f), -attenuation.x * length),
+						 powf(exp(1.0f), -attenuation.y * length),
 						 powf(exp(1.0f), -attenuation.z * length) };
 	return a;
 }
 
-Vector3 RayTracer::TransparentShader(const RTCRay& ray, const Vector3& hitPoint, const Vector3& normalVector, 
+Vector3 RayTracer::TransparentShader(const RTCRay& ray, const Vector3& hitPoint, const Vector3& normalVector,
 	const Vector3& directionVector, const Material& material, const float n_1, const int depth) {
-	
-	float n_2 = material.ior; // Index of refraction
+
+	float n_2 = material.ior;
 	if (n_1 == material.ior) {
 		n_2 = 1.0f; // Transition to air
 	}
@@ -392,34 +458,57 @@ Vector3 RayTracer::TransparentShader(const RTCRay& ray, const Vector3& hitPoint,
 	float n_ratio = n_1 / n_2;
 	float r; // Reflection coefficient from Fresnel equations
 
-	// Calculate angles for reflection and refraction
-	float cos_theta1 = normalVector.DotProduct(-directionVector);
-	float temp = 1.0f - powf(n_1 / n_2, 2.0f) * (1.0f - powf(cos_theta1, 2.0f));
-	float cos_theta2 = sqrt(temp);
-	
-	if (temp < 0.0f) {
-		r = 1.0f; // Total internal reflection
+	// Clamp dot product for robustness
+	float cos_theta1 = clamp(normalVector.DotProduct(-directionVector), -1.0f, 1.0f);
+	float temp = 1.0f - powf(n_ratio, 2.0f) * (1.0f - powf(cos_theta1, 2.0f));
+	float cos_theta2 = 0.0f;
+	if (temp > 0.0f) cos_theta2 = sqrtf(temp);
+
+	Vector3 refractedRayDirection;
+	Vector3 reflectedRayDirection;
+
+	// Compute reflection direction (always valid):
+	reflectedRayDirection = directionVector - 2.0f * normalVector.DotProduct(directionVector) * normalVector;
+	reflectedRayDirection.Normalize();
+
+	// Compute refraction direction, only if not total internal reflection:
+	bool totalInternalReflection = (temp < 0.0f);
+	if (!totalInternalReflection) {
+		refractedRayDirection = n_ratio * directionVector + (n_ratio * cos_theta1 - cos_theta2) * normalVector;
+		refractedRayDirection.Normalize();
+	}
+
+	// Fresnel equations or Schlick approximation
+	if (totalInternalReflection) {
+		r = 1.0f; // All energy goes to reflection
 	}
 	else {
-		// Fresnel equations for reflection coefficient
+		// Robust Fresnel (or try Schlick for speed)
 		float r_s = powf((n_2 * cos_theta2 - n_1 * cos_theta1) / (n_2 * cos_theta2 + n_1 * cos_theta1), 2.0f);
 		float r_p = powf((n_2 * cos_theta1 - n_1 * cos_theta2) / (n_2 * cos_theta1 + n_1 * cos_theta2), 2.0f);
-		r = (r_s + r_p) / 2.0f; // Average reflection coefficient
+		r = (r_s + r_p) / 2.0f;
+		// Alternatíva (stačí na vizuálne efekty):
+		// float R0 = powf((n_1 - n_2) / (n_1 + n_2), 2.0f);
+		// r = R0 + (1.0f - R0) * powf(1.0f - cos_theta1, 5.0f);
 	}
 
-	// Calculate refracted and reflected ray directions
-	Vector3 refractedRayDirection = n_1 / n_2 * directionVector + (n_1 / n_2 * cos_theta1 - cos_theta2) * normalVector;
-	Vector3 reflectedRayDirection = (2.0f * (-directionVector).DotProduct(normalVector)) * normalVector - (-directionVector);
-
-	// Trace secondary rays for reflection and refraction
+	// Trace rays
 	Vector3 refl = TraceRay(MakeSecondaryRay(hitPoint, reflectedRayDirection), n_1, depth + 1);
-	Vector3 refr = TraceRay(MakeSecondaryRay(hitPoint, refractedRayDirection), n_2, depth + 1);
+	Vector3 refr = Vector3(0.0f);
+	if (!totalInternalReflection) {
+		refr = TraceRay(MakeSecondaryRay(hitPoint, refractedRayDirection), n_2, depth + 1);
+		// Fallback na cubemap ak refr je úplne čierna a backgroundEnabled_
+		if (refr == Vector3(0.0f) && backgroundEnabled_ && cubemap_ != nullptr) {
+			Color3f bg = cubemap_->GetTexel(refractedRayDirection);
+			refr = Vector3(bg.r, bg.g, bg.b);
+		}
+	}
 
-	// Combine reflection and refraction using Fresnel coefficient
-	// Apply Beer-Lambert attenuation if traveling through medium
-	return (refl * r + refr * (1.0f - r)) * 
-		   t_b_l(n_1 == 1.0f ? 0.0f : Vector3{ ray.org_x, ray.org_y, ray.org_z }.EuclideanDistance(hitPoint), 
-		         material.attenuation);
+	// Beer-Lambert attenuation len ak sme vo vnútri materiálu
+	float travelLength = (n_1 == 1.0f) ? 0.0f : Vector3{ ray.org_x, ray.org_y, ray.org_z }.EuclideanDistance(hitPoint);
+	Vector3 attenuation = t_b_l(travelLength, material.attenuation);
+
+	return (refl * r + refr * (1.0f - r)) * attenuation;
 }
 
 //=============================================================================
@@ -427,11 +516,12 @@ Vector3 RayTracer::TransparentShader(const RTCRay& ray, const Vector3& hitPoint,
 //=============================================================================
 
 Vector4 RayTracer::VolumetricRender(const RTCRay& ray) {
+	// This method now only handles SDF-based volumetric rendering
 	if (rayMarching_) {
-		// RAY MARCHING: Trace through entire volume accumulating color/opacity
+		// RAY MARCHING: Trace through entire SDF volume accumulating color/opacity
 		return VolumetricEffect(ray);
 	}
-	// SPHERE TRACING: Find first surface intersection only  
+	// SPHERE TRACING: Find first SDF surface intersection only  
 	return SurfaceEffect(ray);
 }
 
@@ -576,18 +666,20 @@ Vector4 RayTracer::SurfaceEffect(const RTCRay& ray)
 //=============================================================================
 
 Vector3 RayTracer::TraceRay(const RTCRay& ray, const float n_1, const int depth, const int maxDepth) {
-	/*
-	 * EMBREE RAY TRACING ALGORITHM:
-	 * 1. Use Intel Embree to find closest triangle intersection
-	 * 2. Retrieve material and geometry information at hit point
-	 * 3. Apply appropriate shader based on material type
-	 * 4. Support recursive rays for reflections/refractions
-	 * 5. Return final shaded color
-	 */
-
 	// Prevent infinite recursion
 	if (depth >= maxDepth) {
-		return Vector3(0.0f); // Return black if maximum recursion depth reached
+		return Vector3(0.0f);
+	}
+
+	// Check if we have any surfaces to intersect with
+	if (surfaces_.empty()) {
+		// No surface geometry loaded - return background
+		Vector3 directionVector{ ray.dir_x, ray.dir_y, ray.dir_z };
+		if (backgroundEnabled_ && cubemap_) {
+			Color3f backgroundColor = cubemap_->GetTexel(directionVector);
+			return Vector3{ backgroundColor.r, backgroundColor.g, backgroundColor.b };
+		}
+		return backgroundColorVec_;
 	}
 
 	// Initialize hit structure for Embree
@@ -604,18 +696,17 @@ Vector3 RayTracer::TraceRay(const RTCRay& ray, const float n_1, const int depth,
 	// EMBREE INTERSECTION: Find closest triangle hit
 	RTCIntersectContext context;
 	rtcInitIntersectContext(&context);
-	rtcIntersect1(scene_, &context, &rayHit); // This is where the BVH traversal happens!
+	rtcIntersect1(scene_, &context, &rayHit);
 
 	Vector3 directionVector{ rayHit.ray.dir_x, rayHit.ray.dir_y, rayHit.ray.dir_z };
 
 	// Handle miss: No geometry hit
 	if (rayHit.hit.geomID == RTC_INVALID_GEOMETRY_ID) {
-		if (backgroundEnabled_) {
-			// Sample environment map (cubemap) for background
+		if (backgroundEnabled_ && cubemap_) {
 			Color3f backgroundColor = cubemap_->GetTexel(directionVector);
 			return Vector3{ backgroundColor.r, backgroundColor.g, backgroundColor.b };
 		}
-		return backgroundColorVec_; // Solid background color
+		return backgroundColorVec_;
 	}
 
 	// Calculate hit point from ray equation: P = O + t*D
@@ -628,7 +719,10 @@ Vector3 RayTracer::TraceRay(const RTCRay& ray, const float n_1, const int depth,
 	// Retrieve geometry and material at hit point
 	RTCGeometry geometry = rtcGetGeometry(scene_, rayHit.hit.geomID);
 	Material* material = (Material*)rtcGetGeometryUserData(geometry);
-	assert(material);
+	if (!material) {
+		// Fallback if no material found
+		return Vector3(1.0f, 0.0f, 1.0f); // Magenta error color
+	}
 
 	// Interpolate normal vector at hit point using barycentric coordinates
 	Normal3f normal;
@@ -636,7 +730,7 @@ Vector3 RayTracer::TraceRay(const RTCRay& ray, const float n_1, const int depth,
 		RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE, 0, &normal.x, 3);
 	Vector3 normalVector{ normal.x, normal.y, normal.z };
 
-	// Flip normal if it points away from the ray (ensure it points toward ray origin)
+	// Flip normal if it points away from the ray
 	if (normalVector.DotProduct(directionVector) > 0.0f) {
 		normalVector *= -1.0f;
 	}
@@ -646,18 +740,18 @@ Vector3 RayTracer::TraceRay(const RTCRay& ray, const float n_1, const int depth,
 	rtcInterpolate0(geometry, rayHit.hit.primID, rayHit.hit.u, rayHit.hit.v,
 		RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE, 1, &texCoord.u, 2);
 
-	// SHADER DISPATCH: Apply appropriate shader based on material type
+	// Apply appropriate shader based on material type
 	switch (material->shader) {
 	case 1:
-		return NormalShader(normalVector);  // Visualize normals as colors
+		return NormalShader(normalVector);
 	case 2:
-		return LambertShader(*material, texCoord, hitPoint, normalVector); // Diffuse only
+		return LambertShader(*material, texCoord, hitPoint, normalVector);
 	case 3:
-		return PhongShader(*material, texCoord, hitPoint, normalVector, directionVector, depth); // Diffuse + Specular
+		return PhongShader(*material, texCoord, hitPoint, normalVector, directionVector, depth);
 	case 4:
-		return TransparentShader(ray, hitPoint, normalVector, directionVector, *material, n_1, depth); // Glass/transparent
+		return TransparentShader(ray, hitPoint, normalVector, directionVector, *material, n_1, depth);
 	default:
-		return LambertShader(*material, texCoord, hitPoint, normalVector); // Default to Lambert
+		return PhongShader(*material, texCoord, hitPoint, normalVector, directionVector, depth);
 	}
 }
 
@@ -667,18 +761,13 @@ Vector3 RayTracer::TraceRay(const RTCRay& ray, const float n_1, const int depth,
 
 Color4f RayTracer::GetPixel(const int x, const int y, const float t)
 {
-	/*
-	 * HYBRID RENDERING PIPELINE:
-	 * 1. SURFACE RAY TRACING: Use Embree for triangle meshes
-	 * 2. VOLUMETRIC RENDERING: Use SDF ray marching for procedural volumes
-	 * 3. COMPOSITE: Combine both results with proper alpha blending
-	 */
-
-	Vector3 rtc_color = Vector3(0.0f);
+	Vector3 finalColor(0.0f);
+	float finalAlpha = 1.0f;
 
 	if (sampling_) {
 		// SUPERSAMPLING: Average multiple rays per pixel for anti-aliasing
-		Vector3 accumulator;
+		Vector3 accumulator(0.0f);
+		float alphaAccumulator = 0.0f;
 
 		for (int j = 0; j < 4; j++) {
 			for (int i = 0; i < 4; i++) {
@@ -686,30 +775,82 @@ Color4f RayTracer::GetPixel(const int x, const int y, const float t)
 				float ksi_y = Random() / 4;
 
 				// Generate ray for sub-pixel sample
-				RTCRay ray = camera_.GenerateRay(float(x) + i * (1.0f / 4.0f) + ksi_x, 
+				RTCRay ray = camera_.GenerateRay(float(x) + i * (1.0f / 4.0f) + ksi_x,
 					float(y) + j * (1.0f / 4.0f) + ksi_y);
-				accumulator += TraceRay(ray); // Trace ray and accumulate color
+
+				// Render based on current mode
+				Vector4 result = RenderPixel(ray);
+				accumulator += Vector3(result.x, result.y, result.z);
+				alphaAccumulator += result.w;
 			}
 		}
+
 		accumulator /= 16.0f; // Average accumulated color (4x4 = 16 samples)
-		rtc_color = accumulator;
+		alphaAccumulator /= 16.0f;
+		finalColor = accumulator;
+		finalAlpha = alphaAccumulator;
 	}
 	else {
 		// SINGLE SAMPLE: Trace one ray per pixel
-		rtc_color = TraceRay(camera_.GenerateRay(float(x), float(y)));
+		RTCRay ray = camera_.GenerateRay(float(x), float(y));
+		Vector4 result = RenderPixel(ray);
+		finalColor = Vector3(result.x, result.y, result.z);
+		finalAlpha = result.w;
 	}
 
-	// VOLUMETRIC RENDERING: Render procedural SDF volumes
-	Vector4 volumetric_color = VolumetricRender(camera_.GenerateRay(float(x), float(y)));
-
-	// COMPOSITE: Blend volumetric and surface results
-	// Formula: C_final = C_volume + C_surface * (1 - α_volume)
-	// This assumes volume is in front of surface
-	Vector3 final_color = Vector3(volumetric_color.x, volumetric_color.y, volumetric_color.z) + 
-		rtc_color * (1.0f - volumetric_color.w);
-
 	// Return final color compressed to [0,1] range
-	return final_color.ToColor4fCompressed();
+	return Color4f{ finalColor.x, finalColor.y, finalColor.z, finalAlpha };
+}
+
+Vector4 RayTracer::RenderPixel(const RTCRay& ray) {
+	switch (currentRenderingMode_) {
+	case RenderingMode::SURFACE_EMBREE: {
+		// Traditional Embree surface rendering
+		Vector3 surfaceColor = TraceRay(ray);
+		return Vector4(surfaceColor.x, surfaceColor.y, surfaceColor.z, 1.0f);
+	}
+
+	case RenderingMode::VOLUMETRIC_SDF: {
+		// SDF-based volumetric rendering
+		Vector4 volumetricColor = VolumetricRender(ray);
+
+		// If volume is transparent, blend with background
+		if (volumetricColor.w < 1.0f) {
+			Vector3 backgroundColor;
+			if (backgroundEnabled_) {
+				Vector3 direction(ray.dir_x, ray.dir_y, ray.dir_z);
+				Color3f bgColor = cubemap_->GetTexel(direction);
+				backgroundColor = Vector3(bgColor.r, bgColor.g, bgColor.b);
+			}
+			else {
+				backgroundColor = backgroundColorVec_;
+			}
+
+			// Alpha blend
+			Vector3 finalColor = Vector3(volumetricColor.x, volumetricColor.y, volumetricColor.z) * volumetricColor.w +
+				backgroundColor * (1.0f - volumetricColor.w);
+
+			return Vector4(finalColor.x, finalColor.y, finalColor.z, 1.0f);
+		}
+
+		return volumetricColor;
+	}
+
+	case RenderingMode::VOLUMETRIC_VDB: {
+		// VDB volumetric rendering
+		return VdbVolumeRayMarching(ray);
+	}
+
+	default: {
+		// Error case - return background
+		if (backgroundEnabled_) {
+			Vector3 direction(ray.dir_x, ray.dir_y, ray.dir_z);
+			Color3f backgroundColor = cubemap_->GetTexel(direction);
+			return Vector4(backgroundColor.r, backgroundColor.g, backgroundColor.b, 1.0f);
+		}
+		return Vector4(backgroundColorVec_.x, backgroundColorVec_.y, backgroundColorVec_.z, 1.0f);
+	}
+	}
 }
 
 //=============================================================================
@@ -749,167 +890,807 @@ void RayTracer::MoveCamera()
 // USER INTERFACE
 //=============================================================================
 
+
 int RayTracer::Ui()
 {
 	static float f = 0.0f;
 	static int counter = 0;
 
-	ImGui::Begin("Ray Tracer Params");
+	ImGui::Begin("Ray Tracer Control Panel");
 
-	ImGui::Text("Surfaces = %d", surfaces_.size());
-	ImGui::Text("Materials = %d", materials_.size());
+	// === HEADER INFO ===
+	ImGui::Text("Surfaces: %d | Materials: %d", surfaces_.size(), materials_.size());
+
+	// Display correct FPS
+	float currentFPS = GetCurrentFPS(); // This will be 0 when paused
+	if (currentFPS > 0.0f) {
+		ImGui::Text("FPS: %.1f (%.3f ms/frame)", currentFPS, 1000.0f / currentFPS);
+	}
+	else {
+		ImGui::Text("FPS: 0.0 (PAUSED)");
+	}
 	ImGui::Separator();
 
-	// === SDF NOISE SETTINGS ===
-	if (ImGui::Checkbox("Noise", &useNoise_)) {
-		Shape::useNoise = useNoise_;
-	}
-	if (ImGui::SliderFloat("Noise Scale", &noiseScale_, 0.0f, 1.0f)) {
-		for (Shape* shape : volumetricShapes_) {
-			shape->noise_.SetScale(noiseScale_);
+	// === RENDERING CONTROL ===
+	if (ImGui::CollapsingHeader("Rendering Control", ImGuiTreeNodeFlags_DefaultOpen)) {
+		// Main render control buttons
+		ImGui::PushStyleColor(ImGuiCol_Button, renderingPaused_ ? ImVec4(0.0f, 0.7f, 0.0f, 1.0f) : ImVec4(0.7f, 0.0f, 0.0f, 1.0f));
+		if (ImGui::Button(renderingPaused_ ? "▶ RESUME" : "⏸ PAUSE", ImVec2(100, 30))) {
+			renderingPaused_ = !renderingPaused_;
+			if (renderingPaused_) {
+				PauseRendering();
+			}
+			else {
+				ResumeRendering();
+			}
 		}
-	}
-	if (ImGui::SliderFloat("Noise Strength", &noiseStrength_, 0.0f, 10.0f)) {
-		for (Shape* shape : volumetricShapes_) {
-			shape->noise_.SetStrength(noiseStrength_);
-		}
-	}
+		ImGui::PopStyleColor();
 
-	// === SDF SMOOTHING ===
-	if (ImGui::SliderFloat("Smooth Factor", &smoothFactor_, 0.0f, 3.0f)) {
-		for (Shape* shape : volumetricShapes_) {
-			if (auto* smoothUnion = dynamic_cast<SmoothUnion*>(shape)) {
-				for (Shape* subShape : smoothUnion->shapes_) {
-					subShape->k_ = smoothFactor_;
+		ImGui::SameLine();
+		if (renderingPaused_) {
+			if (ImGui::Button("🖼 RENDER FRAME", ImVec2(120, 30))) {
+				RequestSingleFrame();
+			}
+		}
+
+		ImGui::SameLine();
+		ImGui::Checkbox("Auto Camera Rotation", &autoRotateCamera_);
+		cameraMovementEnabled_ = autoRotateCamera_ && !renderingPaused_;
+
+		ImGui::SameLine();
+		ImGui::Checkbox("Mouse Camera Input", &mouseCameraInput_);
+
+		if (mouseCameraInput_) {
+			// === MOUSE INTERACTION HANDLING ===
+// Handle mouse input for camera control
+			ImVec2 mousePos = ImGui::GetMousePos();
+			ImVec2 mouseDelta = ImVec2(mousePos.x - lastMousePos_.x, mousePos.y - lastMousePos_.y);
+
+			// Left mouse button (orbital rotation)
+			if (ImGui::IsMouseDown(0)) {
+				if (!leftMouseDragging_) {
+					leftMouseDragging_ = true;
+					lastMousePos_ = mousePos;
+				}
+				else {
+					HandleLeftMouseDrag(mouseDelta);
 				}
 			}
 			else {
-				shape->k_ = smoothFactor_;
+				leftMouseDragging_ = false;
+			}
+
+			// Right mouse button (zoom)
+			if (ImGui::IsMouseDown(1)) {
+				if (!rightMouseDragging_) {
+					rightMouseDragging_ = true;
+					lastMousePos_ = mousePos;
+				}
+				else {
+					HandleRightMouseDrag(mouseDelta);
+				}
+			}
+			else {
+				rightMouseDragging_ = false;
+			}
+
+			lastMousePos_ = mousePos;
+		}
+
+
+		ImGui::Separator();
+
+		// RENDERING MODE SELECTION
+		ImGui::Text("🎨 Rendering Mode:");
+
+		if (ImGui::RadioButton("Surface (Embree)", currentRenderingMode_ == RenderingMode::SURFACE_EMBREE)) {
+			currentRenderingMode_ = RenderingMode::SURFACE_EMBREE;
+		}
+		ImGui::SameLine();
+		if (ImGui::RadioButton("Volumetric SDF", currentRenderingMode_ == RenderingMode::VOLUMETRIC_SDF)) {
+			currentRenderingMode_ = RenderingMode::VOLUMETRIC_SDF;
+		}
+		ImGui::SameLine();
+		if (ImGui::RadioButton("VDB Volume", currentRenderingMode_ == RenderingMode::VOLUMETRIC_VDB)) {
+			currentRenderingMode_ = RenderingMode::VOLUMETRIC_VDB;
+			if (!HasVdbVolume()) {
+				ImGui::SameLine();
+				ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "(No VDB loaded!)");
+			}
+		}
+
+		ImGui::Separator();
+
+		ImGui::Checkbox("VSync", &vsync_);
+		ImGui::SameLine();
+		ImGui::Checkbox("Anti-aliasing (4x4)", &sampling_);
+	}
+
+	// === SURFACE MODEL LOADING === (pridať do UI za VDB sekciu)
+	if (ImGui::CollapsingHeader("Surface Model Loading")) {
+		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 1.0f, 0.3f, 1.0f));
+		ImGui::Text("🎯 Triangle Mesh Models (OBJ)");
+		ImGui::PopStyleColor();
+
+		static char objFilePath[512] = "C:\\Users\\micha\\Documents\\pg1\\data\\6887_allied_avenger.obj";
+		ImGui::InputText("OBJ File Path", objFilePath, sizeof(objFilePath));
+
+		if (ImGui::Button("📁 Load OBJ Model", ImVec2(150, 25))) {
+			if (LoadObjModel(std::string(objFilePath))) {
+				std::cout << "[UI] OBJ model loaded successfully!" << std::endl;
+			}
+			else {
+				std::cout << "[UI ERROR] Failed to load OBJ model!" << std::endl;
+			}
+		}
+
+		ImGui::SameLine();
+		if (ImGui::Button("🗑 Clear Models", ImVec2(100, 25))) {
+			ClearSurfaceModels();
+			// Recreate empty scene
+			rtcReleaseScene(scene_);
+			scene_ = rtcNewScene(device_);
+			rtcCommitScene(scene_);
+		}
+
+		// Model status
+		int modelCount = GetLoadedModelCount();
+		if (modelCount > 0) {
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 1.0f, 0.0f, 1.0f));
+			ImGui::Text("✅ Loaded Models: %d surfaces", modelCount);
+			ImGui::PopStyleColor();
+		}
+		else {
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.0f, 1.0f));
+			ImGui::Text("⚠ No surface models loaded");
+			ImGui::PopStyleColor();
+		}
+	}
+
+	// === VDB VOLUME CONTROLS ===
+	if (ImGui::CollapsingHeader("VDB Volume Loading")) {
+		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 0.7f, 1.0f, 1.0f));
+		ImGui::Text("🗃 OpenVDB File Management");
+		ImGui::PopStyleColor();
+
+		ImGui::InputText("VDB File Path", vdbFilePath_, sizeof(vdbFilePath_));
+		ImGui::InputText("Grid Name", vdbGridName_, sizeof(vdbGridName_));
+
+		if (ImGui::Button("📁 Load VDB Volume", ImVec2(150, 25))) {
+			if (LoadVdbVolume(std::string(vdbFilePath_), std::string(vdbGridName_))) {
+				std::cout << "[VDB] Volume loaded successfully!" << std::endl;
+			}
+			else {
+				std::cout << "[VDB ERROR] Failed to load VDB volume!" << std::endl;
+			}
+		}
+
+		ImGui::SameLine();
+		if (ImGui::Button("🗑 Clear VDB", ImVec2(100, 25))) {
+			CleanupOpenVKL();
+			InitializeOpenVKL();
+		}
+
+		// VDB Status Display
+		if (HasVdbVolume()) {
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 1.0f, 0.0f, 1.0f));
+			ImGui::Text("✅ VDB Volume: LOADED");
+			ImGui::PopStyleColor();
+
+			Vector3 minBounds, maxBounds;
+			GetVdbVolumeBounds(minBounds, maxBounds);
+			ImGui::Text("📏 Bounds: min(%.2f,%.2f,%.2f) max(%.2f,%.2f,%.2f)",
+				minBounds.x, minBounds.y, minBounds.z,
+				maxBounds.x, maxBounds.y, maxBounds.z);
+
+			if (vdbLoader_) {
+				ImGui::Text("📊 Active Voxels: %zu", vdbLoader_->GetActiveVoxelCount());
+				ImGui::Text("📈 Value Range: [%.3f, %.3f]", vdbLoader_->GetMinValue(), vdbLoader_->GetMaxValue());
+			}
+		}
+		else {
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.0f, 1.0f));
+			ImGui::Text("⚠ VDB Volume: NOT LOADED");
+			ImGui::PopStyleColor();
+		}
+	}
+
+	// === RAY MARCHING CONTROLS ===
+	if (ImGui::CollapsingHeader("Volumetric Ray Marching")) {
+		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.7f, 0.3f, 1.0f));
+		ImGui::Text("🔬 SDF & Volumetric Rendering");
+		ImGui::PopStyleColor();
+
+		// Rendering mode toggle
+		ImGui::Text("Rendering Mode:");
+		if (ImGui::RadioButton("Surface Mode (Sphere Tracing)", !rayMarching_)) {
+			rayMarching_ = false;
+		}
+		if (ImGui::RadioButton("Volume Mode (Ray Marching)", rayMarching_)) {
+			rayMarching_ = true;
+		}
+
+		ImGui::Separator();
+
+		// Ray marching parameters
+		if (ImGui::SliderFloat("Step Size", &stepSize_, 0.001f, 1.0f, "%.4f")) {
+			maxSteps_ = static_cast<int>(maxDistance_ / stepSize_);
+		}
+		if (ImGui::SliderFloat("Max Distance", &maxDistance_, 0.0f, 1000000.0f)) {
+			maxSteps_ = static_cast<int>(maxDistance_ / stepSize_);
+		}
+		ImGui::Text("Max Steps: %d", maxSteps_);
+
+		ImGui::SliderFloat("Absorption Coeff.", &absorptionCoefficient_, 0.0f, 3.0f);
+		ImGui::SliderFloat("Light Attenuation", &lightAttenuationFactor_, 0.0f, 3.0f);
+
+		if (ImGui::ColorEdit3("Volumetric Albedo", volumetricAlbedo_)) {
+			volumetricAlbedoVec_ = Vector3(volumetricAlbedo_[0], volumetricAlbedo_[1], volumetricAlbedo_[2]);
+		}
+
+		// SDF Noise controls
+		ImGui::Separator();
+		ImGui::Text("🌊 Procedural Noise (SDF only):");
+		if (ImGui::Checkbox("Enable Noise", &useNoise_)) {
+			Shape::useNoise = useNoise_;
+		}
+		if (ImGui::SliderFloat("Noise Scale", &noiseScale_, 0.0f, 1.0f)) {
+			for (Shape* shape : volumetricShapes_) {
+				shape->noise_.SetScale(noiseScale_);
+			}
+		}
+		if (ImGui::SliderFloat("Noise Strength", &noiseStrength_, 0.0f, 10.0f)) {
+			for (Shape* shape : volumetricShapes_) {
+				shape->noise_.SetStrength(noiseStrength_);
+			}
+		}
+		if (ImGui::SliderFloat("SDF Smooth Factor", &smoothFactor_, 0.0f, 3.0f)) {
+			for (Shape* shape : volumetricShapes_) {
+				if (auto* smoothUnion = dynamic_cast<SmoothUnion*>(shape)) {
+					for (Shape* subShape : smoothUnion->shapes_) {
+						subShape->k_ = smoothFactor_;
+					}
+				}
+				else {
+					shape->k_ = smoothFactor_;
+				}
 			}
 		}
 	}
 
-	// === VOLUMETRIC RENDERING SETTINGS ===
-	ImGui::Checkbox("Ray Marching", &rayMarching_);
-	if (ImGui::SliderFloat("Step Size", &stepSize_, 0.00001f, 0.1f)) {
-		maxSteps_ = static_cast<int>(maxDistance_ / stepSize_);
-	}
-	if (ImGui::SliderFloat("Max Distance", &maxDistance_, 1.0f, 100.0f)) {
-		maxSteps_ = static_cast<int>(maxDistance_ / stepSize_);
-	}
-	ImGui::SliderFloat("Absorption Coefficient", &absorptionCoefficient_, 0.0f, 3.0f);
-	ImGui::SliderFloat("Attenuation Factor", &lightAttenuationFactor_, 0.0f, 3.0f);
-	if (ImGui::ColorEdit3("Volumetric Albedo", volumetricAlbedo_)) {
-		volumetricAlbedoVec_ = Vector3(volumetricAlbedo_[0], volumetricAlbedo_[1], volumetricAlbedo_[2]);
-	};
-
-	// === BACKGROUND SETTINGS ===
-	ImGui::Checkbox("Background", &backgroundEnabled_);
-	if (ImGui::ColorEdit3("Background Color", backgroundColor_)) {
-		backgroundColorVec_ = Vector3(backgroundColor_[0], backgroundColor_[1], backgroundColor_[2]);
-	};
-
-	// === RENDERING SETTINGS ===
-	ImGui::Checkbox("Camera Movement", &cameraMovementEnabled_);
-	ImGui::Checkbox("Vsync", &vsync_);
-	ImGui::Checkbox("Sampling", &sampling_);
-
 	// === CAMERA CONTROLS ===
-	if (ImGui::SliderFloat("Camera X", &cameraX_, -100.0f, 100.0f)) {
-		camera_.SetViewFrom(Vector3(cameraX_, cameraY_, cameraZ_));
-	}
-	if (ImGui::SliderFloat("Camera Y", &cameraY_, -100.0f, 100.0f)) {
-		camera_.SetViewFrom(Vector3(cameraX_, cameraY_, cameraZ_));
-	}
-	if (ImGui::SliderFloat("Camera Z", &cameraZ_, -100.0f, 100.0f)) {
-		camera_.SetViewFrom(Vector3(cameraX_, cameraY_, cameraZ_));
-	}
+	if (ImGui::CollapsingHeader("Camera Controls")) {
+		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 1.0f, 1.0f));
+		ImGui::Text("📷 Interactive Camera Control");
+		ImGui::PopStyleColor();
 
-	// === CAMERA ROTATION ===
-	static int cameraRotationX = 0;
-	static int cameraRotationY = 0;
-	static int cameraRotationZ = 0;
-	static int previousDragDeltaX = 0;
-	static int previousDragDeltaY = 0;
+		ImGui::Text("🖱 Mouse Controls:");
+		ImGui::BulletText("Left Mouse + Drag: Rotate around scene");
+		ImGui::BulletText("Right Mouse + Drag: Zoom in/out");
 
-	if (ImGui::SliderInt("Camera Rotation X", &cameraRotationX, 0, 359)) {
-		Vector3 currentRotation = camera_.GetRotation();
-		currentRotation.x = (float)cameraRotationX;
-		camera_.SetRotation(currentRotation);
-	}
-	if (ImGui::SliderInt("Camera Rotation Y", &cameraRotationY, 0, 359)) {
-		Vector3 currentRotation = camera_.GetRotation();
-		currentRotation.y = (float)cameraRotationY;
-		camera_.SetRotation(currentRotation);
-	}
-	if (ImGui::SliderInt("Camera Rotation Z", &cameraRotationZ, 0, 359)) {
-		Vector3 currentRotation = camera_.GetRotation();
-		currentRotation.z = (float)cameraRotationZ;
-		camera_.SetRotation(currentRotation);
-	}
+		ImGui::Separator();
 
-	// Mouse drag camera control
-	if (ImGui::IsMouseDown(1)) {
-		if (ImGui::IsMouseDragging(1)) {
-			ImVec2 dragDelta = ImGui::GetMouseDragDelta(1);
-			int currentDragDeltaY = static_cast<int>(dragDelta.x);
-			int currentDragDeltaX = static_cast<int>(dragDelta.y);
-			Vector3 currentRotation = camera_.GetRotation();
-			currentRotation.x += currentDragDeltaX / 4 - previousDragDeltaX / 4;
-			currentRotation.y += currentDragDeltaY / 4 - previousDragDeltaY / 4;
-			camera_.SetRotation(currentRotation);
-			previousDragDeltaX = currentDragDeltaX;
-			previousDragDeltaY = currentDragDeltaY;
+		// Current camera info
+		ImGui::Text("Camera Position: (%.2f, %.2f, %.2f)", cameraX_, cameraY_, cameraZ_);
+		ImGui::Text("Distance from center: %.2f", cameraDistance_);
+		ImGui::Text("Azimuth: %.1f°, Elevation: %.1f°", cameraAzimuth_, cameraElevation_);
 
-			currentRotation = camera_.GetRotation();
-			cameraRotationX = (int)currentRotation.x;
-			cameraRotationY = (int)currentRotation.y;
+		ImGui::Separator();
+
+		// Manual controls
+		ImGui::Text("Manual Controls:");
+		if (ImGui::SliderFloat("Distance", &cameraDistance_, minCameraDistance_, maxCameraDistance_)) {
+			UpdateCameraPosition();
+		}
+		if (ImGui::SliderFloat("Azimuth", &cameraAzimuth_, 0.0f, 360.0f)) {
+			UpdateCameraPosition();
+		}
+		if (ImGui::SliderFloat("Elevation", &cameraElevation_, -maxElevation_, maxElevation_)) {
+			UpdateCameraPosition();
+		}
+
+		ImGui::Separator();
+
+		// Reset button
+		if (ImGui::Button("🎯 Reset Camera", ImVec2(120, 25))) {
+			cameraDistance_ = 20.0f;
+			cameraAzimuth_ = 0.0f;
+			cameraElevation_ = 0.0f;
+			UpdateCameraPosition();
 		}
 	}
-	if (ImGui::IsMouseReleased(1)) {
-		previousDragDeltaX = 0;
-		previousDragDeltaY = 0;
-	}
 
-	// === LIGHT CONTROLS ===
-	static int lightX = (int)light_.origin_.x;
-	static int lightY = (int)light_.origin_.y;
-	static int lightZ = (int)light_.origin_.z;
-	if (ImGui::SliderInt("Light X", &lightX, -100, 100)) {
-		light_.origin_ = Vector3(static_cast<float>(lightX), static_cast<float>(lightY), static_cast<float>(lightZ));
-	}
-	if (ImGui::SliderInt("Light Y", &lightY, -100, 100)) {
-		light_.origin_ = Vector3(static_cast<float>(lightX), static_cast<float>(lightY), static_cast<float>(lightZ));
-	}
-	if (ImGui::SliderInt("Light Z", &lightZ, -100, 100)) {
-		light_.origin_ = Vector3(static_cast<float>(lightX), static_cast<float>(lightY), static_cast<float>(lightZ));
+	// === LIGHTING CONTROLS ===
+	if (ImGui::CollapsingHeader("Lighting & Background")) {
+		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 0.3f, 1.0f));
+		ImGui::Text("💡 Scene Lighting");
+		ImGui::PopStyleColor();
+
+		// Light position
+		static int lightX = (int)light_.origin_.x;
+		static int lightY = (int)light_.origin_.y;
+		static int lightZ = (int)light_.origin_.z;
+		if (ImGui::SliderInt("Light X", &lightX, -100, 100)) {
+			light_.origin_ = Vector3(static_cast<float>(lightX), static_cast<float>(lightY), static_cast<float>(lightZ));
+		}
+		if (ImGui::SliderInt("Light Y", &lightY, -100, 100)) {
+			light_.origin_ = Vector3(static_cast<float>(lightX), static_cast<float>(lightY), static_cast<float>(lightZ));
+		}
+		if (ImGui::SliderInt("Light Z", &lightZ, -100, 100)) {
+			light_.origin_ = Vector3(static_cast<float>(lightX), static_cast<float>(lightY), static_cast<float>(lightZ));
+		}
+
+		ImGui::Separator();
+
+		// Background settings
+		ImGui::Text("🌌 Background:");
+		ImGui::Checkbox("Use Cubemap Background", &backgroundEnabled_);
+		if (ImGui::ColorEdit3("Background Color", backgroundColor_)) {
+			backgroundColorVec_ = Vector3(backgroundColor_[0], backgroundColor_[1], backgroundColor_[2]);
+		}
 	}
 
 	// === VIDEO EXPORT ===
-	if (ImGui::Button("Save Video and Exit")) {
-		cv::VideoWriter writer("frames/output.avi",
-			cv::VideoWriter::fourcc('M', 'J', 'P', 'G'),
-			60,
-			cv::Size(width(), height()));
+	if (ImGui::CollapsingHeader("Video Export")) {
+		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+		ImGui::Text("🎬 Video Creation");
+		ImGui::PopStyleColor();
 
-		if (writer.isOpened()) {
-			for (int i = 0; i < frameCount_; ++i) {
-				std::stringstream filename;
-				filename << "frames/frame_" << std::setw(6) << std::setfill('0') << i << ".ppm";
+		ImGui::Text("Frames captured: %d", frameCount_);
 
-				cv::Mat frame = cv::imread(filename.str());
-				if (!frame.empty()) {
-					writer.write(frame);
+		if (ImGui::Button("💾 Save Video and Exit", ImVec2(200, 30))) {
+			cv::VideoWriter writer("frames/output.avi",
+				cv::VideoWriter::fourcc('M', 'J', 'P', 'G'),
+				60,
+				cv::Size(width(), height()));
+
+			if (writer.isOpened()) {
+				for (int i = 0; i < frameCount_; ++i) {
+					std::stringstream filename;
+					filename << "frames/frame_" << std::setw(6) << std::setfill('0') << i << ".ppm";
+
+					cv::Mat frame = cv::imread(filename.str());
+					if (!frame.empty()) {
+						writer.write(frame);
+					}
 				}
+				writer.release();
 			}
-			writer.release();
-		}
 
-		std::cout << "Video successfully created: frames/output.avi" << std::endl;
-		MessageBoxA(NULL, "Video saved successfully", "Success", MB_OK);
-		PostQuitMessage(0);
+			std::cout << "Video successfully created: frames/output.avi" << std::endl;
+			MessageBoxA(NULL, "Video saved successfully", "Success", MB_OK);
+			PostQuitMessage(0);
+		}
 	}
 
 	ImGui::End();
 	return 0;
+}
+
+//=============================================================================
+// OPENVKL VDB INITIALIZATION
+//=============================================================================
+
+bool RayTracer::InitializeOpenVKL() {
+	std::cout << "[VKL] Initializing OpenVKL..." << std::endl;
+
+	// Initialize OpenVKL
+	vklInit();
+
+	// Create CPU device
+	vklDevice_ = vklNewDevice("cpu");
+	if (!vklDevice_) {
+		std::cerr << "[VKL ERROR] Failed to create OpenVKL CPU device!" << std::endl;
+		return false;
+	}
+
+	// Set device parameters
+	vklDeviceSetInt(vklDevice_, "logLevel", VKL_LOG_WARNING);
+	vklDeviceSetString(vklDevice_, "logOutput", "cout");
+	vklDeviceSetString(vklDevice_, "errorOutput", "cerr");
+
+	// Commit device
+	vklCommitDevice(vklDevice_);
+
+	// Create VDB loader
+	vdbLoader_ = std::make_unique<VdbLoader>();
+
+	std::cout << "[VKL] OpenVKL initialized successfully" << std::endl;
+	return true;
+}
+
+bool RayTracer::LoadVdbVolume(const std::string& filename, const std::string& gridName) {
+	if (!vklDevice_) {
+		std::cerr << "[VKL ERROR] OpenVKL not initialized! Call InitializeOpenVKL() first." << std::endl;
+		return false;
+	}
+
+	// Clean up previous volume
+	if (vklSampler_) {
+		vklRelease(vklSampler_);
+		vklSampler_ = VKLSampler{};
+	}
+	if (vklVolume_) {
+		vklRelease(vklVolume_);
+		vklVolume_ = VKLVolume{};
+	}
+
+	// Load VDB volume
+	vklVolume_ = vdbLoader_->LoadVdbFile(filename, gridName, vklDevice_);
+	if (!vklVolume_) {
+		std::cerr << "[VKL ERROR] Failed to load VDB volume from: " << filename << std::endl;
+		return false;
+	}
+
+	// Create sampler
+	vklSampler_ = vklNewSampler(vklVolume_);
+	if (!vklSampler_) {
+		std::cerr << "[VKL ERROR] Failed to create VKL sampler!" << std::endl;
+		vklRelease(vklVolume_);
+		vklVolume_ = VKLVolume{};
+		return false;
+	}
+
+	// Configure sampler
+	vklSetInt(vklSampler_, "filter", VKL_FILTER_LINEAR);
+	vklSetInt(vklSampler_, "gradientFilter", VKL_FILTER_LINEAR);
+	vklCommit(vklSampler_);
+
+	// Get volume info
+	vkl_box3f volumeBounds = vklGetBoundingBox(vklVolume_);
+	vkl_range1f valueRange = vklGetValueRange(vklVolume_, 0);
+
+	std::cout << "[VKL] Volume bounds: min(" << volumeBounds.lower.x << "," << volumeBounds.lower.y << "," << volumeBounds.lower.z << ")"
+		<< " max(" << volumeBounds.upper.x << "," << volumeBounds.upper.y << "," << volumeBounds.upper.z << ")" << std::endl;
+	std::cout << "[VKL] Value range: [" << valueRange.lower << ", " << valueRange.upper << "]" << std::endl;
+
+	return true;
+}
+
+void RayTracer::CleanupOpenVKL() {
+	if (vklSampler_) {
+		vklRelease(vklSampler_);
+		vklSampler_ = VKLSampler{};
+	}
+	if (vklVolume_) {
+		vklRelease(vklVolume_);
+		vklVolume_ = VKLVolume{};
+	}
+	if (vklDevice_) {
+		vklReleaseDevice(vklDevice_);
+		vklDevice_ = VKLDevice{};
+	}
+
+	vdbLoader_.reset();
+	std::cout << "[VKL] OpenVKL cleanup completed" << std::endl;
+}
+
+void RayTracer::GetVdbVolumeBounds(Vector3& minBounds, Vector3& maxBounds) const {
+	if (vdbLoader_) {
+		minBounds = vdbLoader_->GetBoundingBoxMin();
+		maxBounds = vdbLoader_->GetBoundingBoxMax();
+	}
+	else {
+		minBounds = Vector3(0.0f, 0.0f, 0.0f);
+		maxBounds = Vector3(1.0f, 1.0f, 1.0f);
+	}
+}
+
+//=============================================================================
+// VDB VOLUME RAY MARCHING
+//=============================================================================
+
+Vector4 RayTracer::VdbVolumeRayMarching(const RTCRay& ray) {
+	if (!vklSampler_) {
+		// Return background if no VDB volume loaded
+		if (backgroundEnabled_) {
+			Vector3 direction(ray.dir_x, ray.dir_y, ray.dir_z);
+			Color3f backgroundColor = cubemap_->GetTexel(direction);
+			return Vector4(backgroundColor.r, backgroundColor.g, backgroundColor.b, 1.0f);
+		}
+		return Vector4(backgroundColorVec_.x, backgroundColorVec_.y, backgroundColorVec_.z, 1.0f);
+	}
+
+	Vector3 rayOrigin(ray.org_x, ray.org_y, ray.org_z);
+	Vector3 rayDirection(ray.dir_x, ray.dir_y, ray.dir_z);
+	rayDirection.Normalize();
+
+	// Get volume bounds from OpenVKL
+	vkl_box3f volumeBounds = vklGetBoundingBox(vklVolume_);
+	Vector3 minBounds(volumeBounds.lower.x, volumeBounds.lower.y, volumeBounds.lower.z);
+	Vector3 maxBounds(volumeBounds.upper.x, volumeBounds.upper.y, volumeBounds.upper.z);
+
+	// Calculate ray-box intersection
+	Vector3 invDir(
+		rayDirection.x != 0.0f ? 1.0f / rayDirection.x : FLT_MAX,
+		rayDirection.y != 0.0f ? 1.0f / rayDirection.y : FLT_MAX,
+		rayDirection.z != 0.0f ? 1.0f / rayDirection.z : FLT_MAX
+	);
+
+	Vector3 t1 = (minBounds - rayOrigin) * invDir;
+	Vector3 t2 = (maxBounds - rayOrigin) * invDir;
+
+	Vector3 tMin(std::min(t1.x, t2.x), std::min(t1.y, t2.y), std::min(t1.z, t2.z));
+	Vector3 tMax(std::max(t1.x, t2.x), std::max(t1.y, t2.y), std::max(t1.z, t2.z));
+
+	float tNear = std::max({ tMin.x, tMin.y, tMin.z, 0.001f });
+	float tFar = std::min({ tMax.x, tMax.y, tMax.z });
+
+	if (tNear >= tFar) {
+		// No intersection with volume - return background
+		if (backgroundEnabled_) {
+			Vector3 direction(ray.dir_x, ray.dir_y, ray.dir_z);
+			Color3f backgroundColor = cubemap_->GetTexel(direction);
+			return Vector4(backgroundColor.r, backgroundColor.g, backgroundColor.b, 1.0f);
+		}
+		return Vector4(backgroundColorVec_.x, backgroundColorVec_.y, backgroundColorVec_.z, 1.0f);
+	}
+
+	// VDB Ray marching parameters
+	const float stepSize = stepSize_;
+	const unsigned int attributeIndex = 0;
+	const float time = 0.0f;
+
+	// Volumetric rendering variables
+	float accumulatedOpacity = 1.0f;
+	Vector3 accumulatedColor(0.0f, 0.0f, 0.0f);
+
+	// Get value range for better visualization
+	vkl_range1f valueRange = vklGetValueRange(vklVolume_, attributeIndex);
+	float maxDensity = valueRange.upper;
+	if (maxDensity <= 0.0f) maxDensity = 1.0f;
+
+	// Basic ray marching loop through VDB volume
+	int steps = 0;
+	const int maxSteps = static_cast<int>((tFar - tNear) / stepSize) + 1;
+
+	for (float t = tNear; t < tFar && accumulatedOpacity > 0.01f && steps < maxSteps; t += stepSize, steps++) {
+		Vector3 currentPos = rayOrigin + rayDirection * t;
+		vkl_vec3f vklPos = { currentPos.x, currentPos.y, currentPos.z };
+
+		// Sample VDB volume using OpenVKL
+		float density = vklComputeSample(&vklSampler_, &vklPos, attributeIndex, time);
+
+		if (density > 0.0f) {
+			// Normalize density for visualization  
+			float normalizedDensity = std::min(density / maxDensity, 1.0f);
+
+			// Beer-Lambert absorption
+			float absorption = normalizedDensity * absorptionCoefficient_ * stepSize;
+			float transmittance = exp(-absorption);
+
+			float previousOpacity = accumulatedOpacity;
+			accumulatedOpacity *= transmittance;
+			float absorptionFromMarch = previousOpacity - accumulatedOpacity;
+
+			// Simple lighting calculation
+			Vector3 lightDir = light_.origin_ - currentPos;
+			float lightDistance = lightDir.L2Norm();
+			lightDir.Normalize();
+
+			Vector3 lightColor = Vector3(1.0f) * GetLightAttenuation(lightDistance, lightAttenuationFactor_);
+			Vector3 volumeColor = volumetricAlbedoVec_ * lightColor;
+			volumeColor += GetAmbientLight() * volumetricAlbedoVec_;
+
+			// Accumulate color
+			accumulatedColor += absorptionFromMarch * volumeColor * normalizedDensity;
+		}
+	}
+
+	float finalOpacity = 1.0f - accumulatedOpacity;
+
+	// If volume is transparent, blend with background
+	if (finalOpacity < 1.0f) {
+		Vector3 backgroundColor;
+		if (backgroundEnabled_) {
+			Vector3 direction(ray.dir_x, ray.dir_y, ray.dir_z);
+			Color3f bgColor = cubemap_->GetTexel(direction);
+			backgroundColor = Vector3(bgColor.r, bgColor.g, bgColor.b);
+		}
+		else {
+			backgroundColor = backgroundColorVec_;
+		}
+
+		// Alpha blend: C_final = C_volume * alpha + C_background * (1 - alpha)
+		accumulatedColor = accumulatedColor * finalOpacity + backgroundColor * (1.0f - finalOpacity);
+		finalOpacity = 1.0f; // Final result is opaque
+	}
+
+	// Clamp colors
+	accumulatedColor.x = std::min(accumulatedColor.x, 1.0f);
+	accumulatedColor.y = std::min(accumulatedColor.y, 1.0f);
+	accumulatedColor.z = std::min(accumulatedColor.z, 1.0f);
+
+	return Vector4(accumulatedColor.x, accumulatedColor.y, accumulatedColor.z, finalOpacity);
+}
+
+//=============================================================================
+// CAMERA CONTROL IMPLEMENTATION
+//=============================================================================
+
+void RayTracer::UpdateCameraPosition() {
+	// Convert spherical coordinates to Cartesian coordinates
+	float azimuthRad = deg2rad(cameraAzimuth_);
+	float elevationRad = deg2rad(cameraElevation_);
+
+	// Calculate camera position relative to viewAt (0,0,0)
+	Vector3 viewAt(0.0f, 0.0f, 0.0f);
+
+	float x = cameraDistance_ * cos(elevationRad) * cos(azimuthRad);
+	float y = cameraDistance_ * cos(elevationRad) * sin(azimuthRad);
+	float z = cameraDistance_ * sin(elevationRad);
+
+	Vector3 newViewFrom(x, y, z);
+
+	// Update camera
+	camera_.SetViewAt(viewAt);
+	camera_.SetViewFrom(newViewFrom);
+
+	// Update UI values
+	cameraX_ = newViewFrom.x;
+	cameraY_ = newViewFrom.y;
+	cameraZ_ = newViewFrom.z;
+}
+
+void RayTracer::HandleLeftMouseDrag(const ImVec2& mouseDelta) {
+	// Left mouse: Orbital rotation around viewAt
+	const float rotationSpeed = 0.5f; // degrees per pixel
+
+	cameraAzimuth_ += mouseDelta.x * rotationSpeed;
+	cameraElevation_ += mouseDelta.y * rotationSpeed;
+
+	// Normalize azimuth to [0, 360)
+	while (cameraAzimuth_ < 0.0f) cameraAzimuth_ += 360.0f;
+	while (cameraAzimuth_ >= 360.0f) cameraAzimuth_ -= 360.0f;
+
+	// Clamp elevation to prevent gimbal lock
+	cameraElevation_ = std::max(-maxElevation_, std::min(maxElevation_, cameraElevation_));
+
+	UpdateCameraPosition();
+}
+
+void RayTracer::HandleRightMouseDrag(const ImVec2& mouseDelta) {
+	// Right mouse: Zoom in/out
+	// Up/Right = zoom in (decrease distance)
+	// Down/Left = zoom out (increase distance)
+	const float zoomSpeed = 0.1f;
+
+	float zoomDelta = -(mouseDelta.x + mouseDelta.y) * zoomSpeed;
+	cameraDistance_ += zoomDelta;
+
+	// Clamp distance
+	cameraDistance_ = std::max(minCameraDistance_, std::min(maxCameraDistance_, cameraDistance_));
+
+	UpdateCameraPosition();
+}
+
+float RayTracer::GetCurrentFPS() const {
+	return SimpleGuiDX11::GetCurrentFPS();
+}
+//=============================================================================
+// SIMPLIFIED MODEL LOADING
+//=============================================================================
+
+void RayTracer::InitializeFixedSdfScene() {
+	// Create fixed SDF scene that won't change during runtime
+	fixedSdfScene_ = new SmoothUnion({
+		new Sphere(Vector3(0.0f, 0.0f, 1.0f), 4.0f, 1.0f),
+		new Sphere(Vector3(-8.0f, 2.0f, -1.0f), 5.6f, 1.0f),
+		new Plane(0.01f)
+		}, Noise(Noise::NoiseType::FractalBrownianMotion, 1.0f / 3.2f, 7.0f));
+
+	volumetricShapes_.push_back(fixedSdfScene_);
+
+	std::cout << "[RAY TRACER] Fixed SDF scene initialized" << std::endl;
+}
+
+bool RayTracer::LoadObjModel(const std::string& fileName) {
+	std::cout << "[RAY TRACER] Loading OBJ model: " << fileName << std::endl;
+
+	// Clear existing surface models first
+	ClearSurfaceModels();
+
+	// Load new OBJ file
+	std::vector<Surface*> newSurfaces;
+	std::vector<Material*> newMaterials;
+
+	const int noSurfaces = LoadOBJ(fileName.c_str(), newSurfaces, newMaterials);
+
+	if (noSurfaces <= 0) {
+		std::cerr << "[RAY TRACER ERROR] Failed to load model: " << fileName << std::endl;
+		return false;
+	}
+
+	// Create new Embree scene
+	rtcReleaseScene(scene_);
+	scene_ = rtcNewScene(device_);
+
+	// Add loaded surfaces to the new scene
+	for (auto surface : newSurfaces) {
+		// Create Embree geometry for this surface
+		RTCGeometry mesh = rtcNewGeometry(device_, RTC_GEOMETRY_TYPE_TRIANGLE);
+
+		// Vertex buffer
+		Vertex3f* vertices = (Vertex3f*)rtcSetNewGeometryBuffer(
+			mesh, RTC_BUFFER_TYPE_VERTEX, 0, RTC_FORMAT_FLOAT3,
+			sizeof(Vertex3f), 3 * surface->no_triangles());
+
+		// Index buffer
+		Triangle3ui* triangles = (Triangle3ui*)rtcSetNewGeometryBuffer(
+			mesh, RTC_BUFFER_TYPE_INDEX, 0, RTC_FORMAT_UINT3,
+			sizeof(Triangle3ui), surface->no_triangles());
+
+		// Set material
+		rtcSetGeometryUserData(mesh, (void*)(surface->get_material()));
+
+		// Vertex attributes
+		rtcSetGeometryVertexAttributeCount(mesh, 2);
+
+		// Normal buffer
+		Normal3f* normals = (Normal3f*)rtcSetNewGeometryBuffer(
+			mesh, RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE, 0, RTC_FORMAT_FLOAT3,
+			sizeof(Normal3f), 3 * surface->no_triangles());
+
+		// Texture coordinate buffer
+		Coord2f* texCoords = (Coord2f*)rtcSetNewGeometryBuffer(
+			mesh, RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE, 1, RTC_FORMAT_FLOAT2,
+			sizeof(Coord2f), 3 * surface->no_triangles());
+
+		// Fill buffers
+		for (int i = 0, k = 0; i < surface->no_triangles(); ++i) {
+			Triangle& triangle = surface->get_triangle(i);
+
+			for (int j = 0; j < 3; ++j, ++k) {
+				const Vertex& vertex = triangle.vertex(j);
+
+				// Vertex position (no transformation - load as-is)
+				vertices[k].x = vertex.position.x;
+				vertices[k].y = vertex.position.y;
+				vertices[k].z = vertex.position.z;
+
+				// Normal
+				normals[k].x = vertex.normal.x;
+				normals[k].y = vertex.normal.y;
+				normals[k].z = vertex.normal.z;
+
+				// Texture coordinates
+				texCoords[k].u = vertex.texture_coords[0].u;
+				texCoords[k].v = vertex.texture_coords[0].v;
+			}
+
+			// Triangle indices
+			triangles[i].v0 = k - 3;
+			triangles[i].v1 = k - 2;
+			triangles[i].v2 = k - 1;
+		}
+
+		rtcCommitGeometry(mesh);
+		unsigned int geom_id = rtcAttachGeometry(scene_, mesh);
+		rtcReleaseGeometry(mesh);
+	}
+
+	// Commit scene
+	rtcCommitScene(scene_);
+
+	// Store loaded data
+	surfaces_ = newSurfaces;
+	materials_ = newMaterials;
+
+	std::cout << "[RAY TRACER] Successfully loaded " << noSurfaces << " surfaces" << std::endl;
+	return true;
+}
+
+void RayTracer::ClearSurfaceModels() {
+	// Clean up existing surfaces and materials
+	for (auto surface : surfaces_) {
+		delete surface;
+	}
+	surfaces_.clear();
+
+	for (auto material : materials_) {
+		delete material;
+	}
+	materials_.clear();
+
+	std::cout << "[RAY TRACER] Surface models cleared" << std::endl;
 }

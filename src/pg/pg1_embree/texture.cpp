@@ -94,8 +94,8 @@ Color3f Texture::get_texel( const float u, const float v ) const
 	//assert( ( u >= 0.0f && u <= 1.0f ) && ( v >= 0.0f && v <= 1.0f ) );	
 	
 	// nearest neighbor interpolation
-	const int x = max( 0, min( width_ - 1, int( u * width_ ) ) );
-	const int y = max( 0, min( height_ - 1, int( v * height_ ) ) );
+	const int x = std::max( 0, std::min( width_ - 1, int( u * width_ ) ) );
+	const int y = std::max( 0, std::min( height_ - 1, int( v * height_ ) ) );
 	
 	return get_texel( x, y );
 }
