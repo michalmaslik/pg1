@@ -15,11 +15,13 @@ newmtl green_plastic_transparent
 	Ns 32
 	d 1
 	Tr 0
-	Tf 1 1 1
+	Tf 0.4 0.001 0.4
 	illum 2
-	Ka 0.03 0.03 0.03
-	Kd 0.85 1.0 0.01
-	Ks 1.0 1.0 1.0
+	Ka 0.83921576 0.89803928 0.65098041
+	Kd 0.83921576 0.89803928 0.65098041
+	Ks 0.34999999 0.34999999 0.34999999
+	Ni 1.5
+	shader 4
 
 newmtl white_plastic
 	Ns 32
