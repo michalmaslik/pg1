@@ -4,6 +4,7 @@
 #include "tutorials.h"
 #include "utils.h"
 #include "ShadingUtils.h"
+#include "VdbRenderer.h"
 #include <iostream>
 #include "smooth_union.h"
 #include <opencv2/opencv.hpp>
@@ -47,7 +48,8 @@ RayTracer::RayTracer(const int width, const int height,
 	cameraY_ = currentViewFrom.y;
 	cameraZ_ = currentViewFrom.z;
 
-	// Initialize OpenVKL
+	// Vytvor VdbRenderer a inicializuj OpenVKL
+	vdbRenderer_ = std::make_unique<VdbRenderer>();
 	if (!InitializeOpenVKL()) {
 		std::cerr << "[RAY TRACER WARNING] Failed to initialize OpenVKL" << std::endl;
 	}
@@ -1406,264 +1408,59 @@ int RayTracer::Ui()
 }
 
 //=============================================================================
-// OPENVKL VDB INITIALIZATION
+// VDB: TENKE OBALKY DELEGUJICI NA VdbRenderer
+// (vlastni implementace je v VdbRenderer.h / VdbRenderer.cpp)
 //=============================================================================
 
 bool RayTracer::InitializeOpenVKL() {
-	std::cout << "[VKL] Initializing OpenVKL..." << std::endl;
-
-	// Initialize OpenVKL
-	vklInit();
-
-	// Create CPU device
-	vklDevice_ = vklNewDevice("cpu");
-	if (!vklDevice_) {
-		std::cerr << "[VKL ERROR] Failed to create OpenVKL CPU device!" << std::endl;
-		return false;
-	}
-
-	// Set device parameters
-	vklDeviceSetInt(vklDevice_, "logLevel", VKL_LOG_WARNING);
-	vklDeviceSetString(vklDevice_, "logOutput", "cout");
-	vklDeviceSetString(vklDevice_, "errorOutput", "cerr");
-
-	// Commit device
-	vklCommitDevice(vklDevice_);
-
-	// Create VDB loader
-	vdbLoader_ = std::make_unique<VdbLoader>();
-
-	std::cout << "[VKL] OpenVKL initialized successfully" << std::endl;
-	return true;
+	return vdbRenderer_ ? vdbRenderer_->initialize() : false;
 }
 
 bool RayTracer::LoadVdbVolume(const std::string& filename, const std::string& gridName) {
-	// Exclusive lock: prevents VdbVolumeRayMarching from sampling a volume
-	// that is being concurrently released and replaced.
+	// Exkluzivni zamek: blokuje, dokud vsechna vlakna GetPixel() neuvolni sdileny zamek
 	std::unique_lock<std::shared_mutex> reloadLock(sceneMutex_);
-
-	if (!vklDevice_) {
-		std::cerr << "[VKL ERROR] OpenVKL not initialized! Call InitializeOpenVKL() first." << std::endl;
-		return false;
-	}
-
-	// Clean up previous volume
-	if (vklSampler_) {
-		vklRelease(vklSampler_);
-		vklSampler_ = VKLSampler{};
-	}
-	if (vklVolume_) {
-		vklRelease(vklVolume_);
-		vklVolume_ = VKLVolume{};
-	}
-
-	// Load VDB volume
-	vklVolume_ = vdbLoader_->LoadVdbFile(filename, gridName, vklDevice_);
-	if (!vklVolume_) {
-		std::cerr << "[VKL ERROR] Failed to load VDB volume from: " << filename << std::endl;
-		return false;
-	}
-
-	// Create sampler
-	vklSampler_ = vklNewSampler(vklVolume_);
-	if (!vklSampler_) {
-		std::cerr << "[VKL ERROR] Failed to create VKL sampler!" << std::endl;
-		vklRelease(vklVolume_);
-		vklVolume_ = VKLVolume{};
-		return false;
-	}
-
-	// Configure sampler
-	vklSetInt(vklSampler_, "filter", VKL_FILTER_LINEAR);
-	vklSetInt(vklSampler_, "gradientFilter", VKL_FILTER_LINEAR);
-	vklCommit(vklSampler_);
-
-	// Get volume info
-	vkl_box3f volumeBounds = vklGetBoundingBox(vklVolume_);
-	vkl_range1f valueRange = vklGetValueRange(vklVolume_, 0);
-
-	std::cout << "[VKL] Volume bounds: min(" << volumeBounds.lower.x << "," << volumeBounds.lower.y << "," << volumeBounds.lower.z << ")"
-		<< " max(" << volumeBounds.upper.x << "," << volumeBounds.upper.y << "," << volumeBounds.upper.z << ")" << std::endl;
-	std::cout << "[VKL] Value range: [" << valueRange.lower << ", " << valueRange.upper << "]" << std::endl;
-
-	return true;
+	return vdbRenderer_ ? vdbRenderer_->loadVolume(filename, gridName) : false;
 }
 
 void RayTracer::CleanupOpenVKL() {
-	if (vklSampler_) {
-		vklRelease(vklSampler_);
-		vklSampler_ = VKLSampler{};
-	}
-	if (vklVolume_) {
-		vklRelease(vklVolume_);
-		vklVolume_ = VKLVolume{};
-	}
-	if (vklDevice_) {
-		vklReleaseDevice(vklDevice_);
-		vklDevice_ = VKLDevice{};
-	}
+	if (vdbRenderer_) vdbRenderer_->cleanup();
+}
 
-	vdbLoader_.reset();
-	std::cout << "[VKL] OpenVKL cleanup completed" << std::endl;
+bool RayTracer::HasVdbVolume() const {
+	return vdbRenderer_ && vdbRenderer_->hasVolume();
 }
 
 void RayTracer::GetVdbVolumeBounds(Vector3& minBounds, Vector3& maxBounds) const {
-	if (vdbLoader_) {
-		minBounds = vdbLoader_->GetBoundingBoxMin();
-		maxBounds = vdbLoader_->GetBoundingBoxMax();
-	}
-	else {
-		minBounds = Vector3(0.0f, 0.0f, 0.0f);
-		maxBounds = Vector3(1.0f, 1.0f, 1.0f);
-	}
+	if (vdbRenderer_) vdbRenderer_->getBounds(minBounds, maxBounds);
+	else { minBounds = Vector3(0.0f); maxBounds = Vector3(1.0f); }
 }
 
-//=============================================================================
-// VDB VOLUME RAY MARCHING
-//=============================================================================
-
-Vector4 RayTracer::VdbVolumeRayMarching(const RTCRay& ray, bool compositeBg) {
-	if (!vklSampler_) {
-		// Return background if no VDB volume loaded.
-		// Guard cubemap_ against null: loading may have failed gracefully.
-		if (backgroundEnabled_ && cubemap_) {
-			Vector3 direction(ray.dir_x, ray.dir_y, ray.dir_z);
-			Color3f backgroundColor = cubemap_->GetTexel(direction);
-			return Vector4(backgroundColor.r, backgroundColor.g, backgroundColor.b, 1.0f);
-		}
-		return Vector4(backgroundColorVec_.x, backgroundColorVec_.y, backgroundColorVec_.z, 1.0f);
-	}
-
-	Vector3 rayOrigin(ray.org_x, ray.org_y, ray.org_z);
-	Vector3 rayDirection(ray.dir_x, ray.dir_y, ray.dir_z);
-	rayDirection.Normalize();
-
-	// Get volume bounds from OpenVKL, offset by the animation displacement
-	vkl_box3f volumeBounds = vklGetBoundingBox(vklVolume_);
-	Vector3 minBounds(volumeBounds.lower.x + vdbAnimOffset_.x,
-	                  volumeBounds.lower.y + vdbAnimOffset_.y,
-	                  volumeBounds.lower.z + vdbAnimOffset_.z);
-	Vector3 maxBounds(volumeBounds.upper.x + vdbAnimOffset_.x,
-	                  volumeBounds.upper.y + vdbAnimOffset_.y,
-	                  volumeBounds.upper.z + vdbAnimOffset_.z);
-
-	// Calculate ray-box intersection
-	Vector3 invDir(
-		rayDirection.x != 0.0f ? 1.0f / rayDirection.x : FLT_MAX,
-		rayDirection.y != 0.0f ? 1.0f / rayDirection.y : FLT_MAX,
-		rayDirection.z != 0.0f ? 1.0f / rayDirection.z : FLT_MAX
-	);
-
-	Vector3 t1 = (minBounds - rayOrigin) * invDir;
-	Vector3 t2 = (maxBounds - rayOrigin) * invDir;
-
-	Vector3 tMin(std::min(t1.x, t2.x), std::min(t1.y, t2.y), std::min(t1.z, t2.z));
-	Vector3 tMax(std::max(t1.x, t2.x), std::max(t1.y, t2.y), std::max(t1.z, t2.z));
-
-	float tNear = std::max({ tMin.x, tMin.y, tMin.z, 0.001f });
-	float tFar = std::min({ tMax.x, tMax.y, tMax.z });
-
-	if (tNear >= tFar) {
-		// No intersection with volume - return background.
-		// Guard cubemap_ against null: same pattern as TraceRay / TracePath.
-		if (backgroundEnabled_ && cubemap_) {
-			Vector3 direction(ray.dir_x, ray.dir_y, ray.dir_z);
-			Color3f backgroundColor = cubemap_->GetTexel(direction);
-			return Vector4(backgroundColor.r, backgroundColor.g, backgroundColor.b, 1.0f);
-		}
-		return Vector4(backgroundColorVec_.x, backgroundColorVec_.y, backgroundColorVec_.z, 1.0f);
-	}
-
-	// VDB Ray marching parameters
-	const float stepSize = stepSize_;
-	const unsigned int attributeIndex = 0;
-	const float time = 0.0f;
-
-	// Volumetric rendering variables
-	float accumulatedOpacity = 1.0f;
-	Vector3 accumulatedColor(0.0f, 0.0f, 0.0f);
-
-	// Get value range for better visualization
-	vkl_range1f valueRange = vklGetValueRange(vklVolume_, attributeIndex);
-	float maxDensity = valueRange.upper;
-	if (maxDensity <= 0.0f) maxDensity = 1.0f;
-
-	// Basic ray marching loop through VDB volume
-	int steps = 0;
-	const int maxSteps = static_cast<int>((tFar - tNear) / stepSize) + 1;
-
-	for (float t = tNear; t < tFar && accumulatedOpacity > 0.01f && steps < maxSteps; t += stepSize, steps++) {
-		Vector3 currentPos = rayOrigin + rayDirection * t;
-		// Convert to volume local space by subtracting the animation displacement
-		vkl_vec3f vklPos = { currentPos.x - vdbAnimOffset_.x,
-		                     currentPos.y - vdbAnimOffset_.y,
-		                     currentPos.z - vdbAnimOffset_.z };
-
-		// Sample VDB volume using OpenVKL
-		float density = vklComputeSample(&vklSampler_, &vklPos, attributeIndex, time);
-
-		if (density > 0.0f) {
-			// Normalize density for visualization  
-			float normalizedDensity = std::min(density / maxDensity, 1.0f);
-
-			// Beer-Lambert absorption
-			float absorption = normalizedDensity * absorptionCoefficient_ * stepSize;
-			float transmittance = exp(-absorption);
-
-			float previousOpacity = accumulatedOpacity;
-			accumulatedOpacity *= transmittance;
-			float absorptionFromMarch = previousOpacity - accumulatedOpacity;
-
-			// Simple lighting calculation
-			Vector3 lightDir = light_.position - currentPos;
-			float lightDistance = lightDir.L2Norm();
-			lightDir.Normalize();
-
-			Vector3 lightColor = Vector3(1.0f) * getLightAttenuation(lightDistance, lightAttenuationFactor_);
-			Vector3 volumeColor = volumetricAlbedoVec_ * lightColor;
-			volumeColor += getAmbientLight() * volumetricAlbedoVec_;
-
-			// --- Global Sun in-scattering (VDB) ----------------------------
-			// Directional — parallel rays, no 1/d² attenuation.
-			// The existing VDB lighting model does not cast per-step shadow
-			// rays for scene lights either, so we follow the same approach.
-			if (frameSunEnabled_) {
-				volumeColor += volumetricAlbedoVec_ * frameSunColor_ * frameSunIntensity_;
-			}
-
-			// Accumulate color
-			accumulatedColor += absorptionFromMarch * volumeColor * normalizedDensity;
-		}
-	}
-
-	float finalOpacity = 1.0f - accumulatedOpacity;
-
-	// Blend with background when caller wants a self-contained result.
-	// COMBINED_PT_VDB passes compositeBg=false to receive raw (rgb, opacity)
-	// for external Porter-Duff compositing with the PT surface underneath.
-	if (compositeBg && finalOpacity < 1.0f) {
-		Vector3 backgroundColor;
-		if (backgroundEnabled_) {
-			Vector3 direction(ray.dir_x, ray.dir_y, ray.dir_z);
-			Color3f bgColor = cubemap_->GetTexel(direction);
-			backgroundColor = Vector3(bgColor.r, bgColor.g, bgColor.b);
-		}
-		else {
-			backgroundColor = backgroundColorVec_;
-		}
-
-		accumulatedColor = accumulatedColor * finalOpacity + backgroundColor * (1.0f - finalOpacity);
-		finalOpacity = 1.0f;
-	}
-
-	// Clamp colors
-	accumulatedColor.x = std::min(accumulatedColor.x, 1.0f);
-	accumulatedColor.y = std::min(accumulatedColor.y, 1.0f);
-	accumulatedColor.z = std::min(accumulatedColor.z, 1.0f);
-
-	return Vector4(accumulatedColor.x, accumulatedColor.y, accumulatedColor.z, finalOpacity);
+/// Sestavi VdbRenderContext z aktualniho (frame-stabilniho) stavu rendereru.
+/// Volano tesne pred rayMarch() aby byl kontext konzistentni behem celeho snimku.
+VdbRenderContext RayTracer::buildVdbContext() const {
+	VdbRenderContext ctx;
+	ctx.animOffset             = vdbAnimOffset_;
+	ctx.stepSize               = stepSize_;
+	ctx.absorptionCoeff        = absorptionCoefficient_;
+	ctx.lightAttenuationFactor = lightAttenuationFactor_;
+	ctx.volumetricAlbedo       = volumetricAlbedoVec_;
+	ctx.primaryLight           = light_;
+	ctx.backgroundEnabled      = backgroundEnabled_;
+	ctx.backgroundColor        = backgroundColorVec_;
+	ctx.cubemap                = cubemap_.get();
+	ctx.sunEnabled             = frameSunEnabled_;
+	ctx.sunColor               = frameSunColor_;
+	ctx.sunIntensity           = frameSunIntensity_;
+	return ctx;
 }
+//=============================================================================
+// VDB VOLUME RAY MARCHING (deleguje na VdbRenderer)
+//=============================================================================
 
+Vector4 RayTracer::VdbVolumeRayMarching(const RTCRay& ray, const bool compositeBg) {
+	if (!vdbRenderer_) return Vector4(0.0f, 0.0f, 0.0f, 1.0f);
+	return vdbRenderer_->rayMarch(ray, buildVdbContext(), compositeBg);
+}
 //=============================================================================
 // CAMERA CONTROL IMPLEMENTATION
 //=============================================================================
@@ -1959,15 +1756,9 @@ void RayTracer::ClearScene()
 	materials_.clear();  // ~Material() now safe: all texture slots are null
 
 	// ---- OpenVKL teardown (per-scene data only, device preserved) -----------
-	// We release the sampler and volume but intentionally keep vklDevice_ alive.
-	// Destroying the device (as CleanupOpenVKL() does) requires re-running
-	// vklInit() + vklNewDevice() for the next VDB scene, which is expensive and
-	// would leave vklDevice_ null between hot-swaps.
-	// Resetting vdbLoader_ wipes the stale bounding-box / grid-name cache so
-	// GetVdbVolumeBounds() cannot return data from the previous scene.
-	if (vklSampler_) { vklRelease(vklSampler_); vklSampler_ = VKLSampler{}; }
-	if (vklVolume_)  { vklRelease(vklVolume_);  vklVolume_  = VKLVolume{};  }
-	if (vdbLoader_)  { vdbLoader_ = std::make_unique<VdbLoader>(); }
+	// Uvolni pouze svazek a sampler, zarizeni zachovej (VdbRenderer::clearVolume).
+	// Volani clearVolume() (ne cleanup()) zachovava device pro dalsi hot-swap.
+	if (vdbRenderer_) vdbRenderer_->clearVolume();
 
 	// ---- SDF observer list --------------------------------------------------
 	// volumetricShapes_ holds non-owning raw pointers; just clear the list.

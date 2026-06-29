@@ -14,8 +14,7 @@
 #include "plane.h"
 #include "smooth_union.h"
 #include "vector4.h"
-#include <openvkl/openvkl.h>
-#include "vdb_loader.h"
+#include "VdbRenderer.h"
 #include "SceneLoader.h"
 #include <memory>
 #include <shared_mutex>
@@ -234,8 +233,8 @@ public:
 	//! VDB Volume ray marching implementation
 	Vector4 VdbVolumeRayMarching(const RTCRay& ray, bool compositeBg = true);
 
-	//! Check if VDB volume is loaded
-	bool HasVdbVolume() const { return vklVolume_ != VKLVolume{}; }
+	//! Check if VDB volume is loaded (delegates to VdbRenderer)
+	[[nodiscard]] bool HasVdbVolume() const;
 
 	//! Get VDB volume bounding box
 	void GetVdbVolumeBounds(Vector3& minBounds, Vector3& maxBounds) const;
@@ -322,13 +321,11 @@ private:
 	std::unique_ptr<CubeMap> cubemap_;
 
 	// =========================================================================
-	// OPENVKL VDB VOLUME RENDERING
+	// VDB RENDERER (OpenVKL subsystem — zapouzdreno v samostatne tride)
 	// =========================================================================
 
-	VKLDevice                  vklDevice_{};  ///< OpenVKL device
-	VKLVolume                  vklVolume_{};  ///< OpenVKL VDB volume
-	VKLSampler                 vklSampler_{}; ///< OpenVKL sampler
-	std::unique_ptr<VdbLoader> vdbLoader_;    ///< VDB file loader
+	/// Vlastni cely OpenVKL subsystem (device, volume, sampler, loader).
+	std::unique_ptr<VdbRenderer> vdbRenderer_;
 
 	// =========================================================================
 	// CAMERA & LIGHTS
@@ -546,7 +543,7 @@ private:
 	/// by @p desc, and sets the rendering mode specified by the scene entry.
 	void LoadSceneFromDescription(const SceneDescription& desc);
 
-	/// Maps a mode token string to the RenderingMode enum (kept for legacy/debug use).
+	/// Sestavi VdbRenderContext z aktualniho stavu RayTraceru (volano pred rayMarch).`r`n	[[nodiscard]] VdbRenderContext buildVdbContext() const;`r`n`r`n	/// Maps a mode token string to the RenderingMode enum (kept for legacy/debug use).
 	/// Defaults to SURFACE_EMBREE for unrecognised strings.
 	RenderingMode ModeFromString(const std::string& modeStr) const;
 
