@@ -1,10 +1,17 @@
 ﻿#include "stdafx.h"
-#include "raytracer.h"
+/**
+ * @file  raytracer_embree.cpp
+ * @brief Sprava Embree zarizeni, sceny a nacteni OBJ geometrie.
+ *
+ * Obsahuje: initDeviceAndScene, releaseDeviceAndScene, loadModel, loadScene,
+ * isHitPointVisible, initializeFixedSdfScene, loadObjModel,
+ * clearSurfaceModels, clearScene.
+ */#include "raytracer.h"
 #include "objloader.h"
 #include "ShadingUtils.h"
 
 ==
-// INTEL EMBREE INITIALIZATION (Surface Ray Tracing)
+// INICIALIZACE EMBREE
 //=============================================================================
 
 int RayTracer::initDeviceAndScene(const char* config)
@@ -45,7 +52,7 @@ int RayTracer::releaseDeviceAndScene()
 }
 
 //=============================================================================
-// SURFACE GEOMETRY LOADING (Triangle Meshes for Embree)
+// NACITANI GEOMETRIE (trojuhelnikove site pro Embree)
 //=============================================================================
 
 void RayTracer::loadModel(const std::string& fileName, const Transform& transform)
@@ -173,7 +180,7 @@ void RayTracer::loadScene(
 }
 
 //=============================================================================
-// UTILITY FUNCTIONS
+// POMOCNE FUNKCE
 //=============================================================================
 
 // makeSecondaryRay -> presunuto do ShadingUtils.cpp
@@ -220,7 +227,7 @@ bool RayTracer::isHitPointVisible(const Vector3& hitPoint, const Vector3& lightP
 }
 
 //=============================================================================
-// LIGHTING & SHADING UTILITIES
+// POMOCNE FUNKCE OSVETLENI
 //=============================================================================
 
 // getLightAttenuation -> presunuto do ShadingUtils.cpp
@@ -486,5 +493,5 @@ void RayTracer::clearScene()
 /// @param cosTheta  Dot product of incoming and outgoing direction.
 /// @param g         Asymmetry factor in (-1,1); 0 = isotropic.
 //=============================================================================
-// PATH TRACING: STATICKE POMOCNE METODY (deleguji na PathTracer)
+// SLEDOVANI CEST: STATICKE POMOCNE METODY (delegace na PathTracer)
 //=============================================================================

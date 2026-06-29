@@ -1,5 +1,11 @@
 ﻿#include "stdafx.h"
-#include "raytracer.h"
+/**
+ * @file  raytracer_scene.cpp
+ * @brief Konfigurace sceny, nacitani ze souboru .scn a aktualizace animaci.
+ *
+ * Obsahuje: loadPredefinedScene, modeFromString, resolveActiveMode,
+ * loadSceneFromDescription, updateScene, updateEntityTransforms.
+ */#include "raytracer.h"
 #include "objloader.h"
 
 void RayTracer::loadPredefinedScene(SceneType type)
@@ -357,7 +363,7 @@ void RayTracer::updateScene(const float time)
 }
 
 //=============================================================================
-// ENTITY TRANSFORMACE -- deleguje na SceneManager
+// TRANSFORMACE ENTIT -- deleguje na SceneManager
 //=============================================================================
 
 void RayTracer::updateEntityTransforms(const float time)

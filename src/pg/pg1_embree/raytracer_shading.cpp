@@ -1,9 +1,15 @@
 ﻿#include "stdafx.h"
-#include "raytracer.h"
+/**
+ * @file  raytracer_shading.cpp
+ * @brief Implementace povrchových shaderů a Whittova sledování paprsku.
+ *
+ * Obsahuje: normalShader, lambertShader, phongShader, transparentShader,
+ * traceRay (Whittův model s Embree BVH).
+ */#include "raytracer.h"
 #include "ShadingUtils.h"
 
 ==
-// SURFACE SHADING MODELS (for Embree-traced geometry)
+// POVRCHOVE SHADERY (pro geometrii sledovanou Embree)
 //=============================================================================
 
 Vector3 RayTracer::normalShader(const Vector3& normalVector) {
@@ -214,7 +220,7 @@ Vector4 RayTracer::surfaceEffect(const RTCRay& ray)
 	return sdfRenderer_->surfaceEffect(ray, buildSdfContext());
 }
 //=============================================================================
-// MAIN RAY TRACING ENGINE (Embree-based surface ray tracing)
+// HLAVNI MODUL SLEDOVANI PAPRSKU (Embree BVH)
 //=============================================================================
 
 Vector3 RayTracer::traceRay(const RTCRay& ray, const float n_1, const int depth, const int maxDepth) {
@@ -312,6 +318,6 @@ Vector3 RayTracer::traceRay(const RTCRay& ray, const float n_1, const int depth,
 }
 
 //=============================================================================
-// MAIN RENDERING PIPELINE
+// HLAVNI RENDEROVACI PIPELINE
 //=============================================================================
 

@@ -360,7 +360,7 @@ Vector4 RayTracer::renderPixel(const RTCRay& ray) {
 // CAMERA ANIMATION
 
 //=============================================================================
-// POHYB KAMERY A UI DELEGACE
+// POHYB KAMERY A DELEGACE UI
 //=============================================================================
 
 //=============================================================================
@@ -510,7 +510,7 @@ float RayTracer::getCurrentFPS() const {
 /// @param cosTheta  Dot product of incoming and outgoing direction.
 /// @param g         Asymmetry factor in (-1,1); 0 = isotropic.
 //=============================================================================
-// PATH TRACING: STATICKE POMOCNE METODY (deleguji na PathTracer)
+// SLEDOVANI CEST: STATICKE POMOCNE METODY (delegace na PathTracer)
 //=============================================================================
 
 float RayTracer::evaluateHenyeyGreenstein(const float cosTheta, const float g) {
@@ -562,7 +562,7 @@ PathTracingContext RayTracer::buildPathTracingContext() const {
 	return ctx;
 }
 //=============================================================================
-// COMBINED MODE: Embree surface hit with depth (used by COMBINED_SDF)
+// KOMBINOVANY REZIM: zasah povrchu s hloubkou (pouziva COMBINED_SDF)
 //=============================================================================
 
 /// Traces a primary ray through the Embree scene and returns both the shaded

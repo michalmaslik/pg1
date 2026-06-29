@@ -27,60 +27,60 @@
 #include "RenderTypes.h"
 
 
-/*! \class RayTracer
-\brief Hybrid Ray Tracer with dual rendering pipeline.
+/**
+ * @class RayTracer
+ * @brief Hybridni renderer kombinujici Whittovo sledovani paprsku, SDF a VDB objemy a sledovani cest.
+ *
+ * Trida implementuje sofistikovany hybridni renderer kombinujici dve zakladni techniky:
+ *
+ * 1. POVRCHOVE SLEDOVANI PAPRSKU (Intel Embree):
+ *    - Vyuziva knihovnu Intel Embree pro vysokovykonne sledovani paprsku pres trojuhelniky.
+ *    - BVH (Bounding Volume Hierarchy) jako akceleracni strukturu.
+ *    - Povrchove shadery: Lambert, Phong, transparentni materialy.
+ *    - Hardwarove optimalizovane pruseciky paprsek-trojuhelnik.
+ *
+ * 2. VOLUMETRICKE RENDEROVANI (SDF krochlovani + OpenVKL VDB):
+ *    - Vlastni implementace SDF ray marchingu pro proceduralni oblaky.
+ *    - Podpora rezimu sphere-tracing (povrch) i volumetrickeho krochlovani.
+ *    - Beer-Lambertova absorpce pro realisticke volumetricke osvetleni.
+ *    - Hladka sjednoceni a CSG operace na proceduralnich telesech.
+ *    - VDB objemy pres OpenVKL pro fyzikalne presne renderovani dymu/ohne.
+ *
+ * 3. SLEDOVANI CEST (Monte Carlo Path Tracing):
+ *    - Iterativni MC sledovac s NEE (Next Event Estimation).
+ *    - Ruska ruleta pro nezkreslene ukonceni cesty.
+ *    - Podpora dielektrik (sklo), Phongove odrazivosti a Lambertovy difuze.
+ *
+ * Architektura (Godovy objekt rozlozen do samostatnych trid):
+ *    - VdbRenderer   - OpenVKL subsystem (device, volume, sampler).
+ *    - SdfRenderer   - SDF volumetricke krochlovani (bezstavovy).
+ *    - PathTracer    - Monte Carlo sledovani cest (bezstavovy).
+ *    - SceneManager  - Sprava scen, animaci a svetel.
+ *    - RayTracerUI   - ImGui ovladaci panel (friend pristup).
+ *
+ * @author Michal Maslik
+ * @version 2.0
+ * @date 2024-2025
+ */
 
-This class implements a sophisticated hybrid renderer that combines two complementary
-rendering techniques for maximum flexibility and visual quality:
-
-1. SURFACE RAY TRACING (Intel Embree):
-   - Uses Intel Embree library for high-performance triangle mesh rendering
-   - BVH (Bounding Volume Hierarchy) acceleration structure
-   - Supports traditional polygon-based models (OBJ files)
-   - Standard surface shading: Lambert, Phong, transparent materials
-   - Hardware-optimized ray-triangle intersections
-
-2. VOLUMETRIC RENDERING (SDF Ray Marching):
-   - Custom SDF (Signed Distance Function) ray marching implementation
-   - Procedural volumetric shapes with noise
-   - Supports both surface (sphere tracing) and volume (ray marching) modes
-   - Beer-Lambert absorption for realistic volumetric lighting
-   - Smooth unions and CSG operations on procedural shapes
-
-The two pipelines are composited using alpha blending to create the final image.
-
-Key Features:
-- Real-time interactive preview with ImGui controls
-- Supersampling anti-aliasing support
-- Environment mapping with cubemaps
-- Shadow ray optimization
-- Recursive reflection/refraction rays
-- Camera animation and manual controls
-- Video export functionality
-
-\author Michal Maslik
-\version 1.0
-\date 2024
-*/
-
-// Stores the result of an extended surface ray query (color + hit distance)
+/// @brief Vysledek rozsireneho dotazu paprsku -- barva a vzdalenost zasahu.
 struct SurfaceHit {
-	Vector3 color;       // Shaded surface color (or background color on miss)
-	float   tHit;        // Ray parameter t at hit point; FLT_MAX if no geometry was hit
-	bool    hasHit;      // true if a triangle was intersected
+	Vector3 color;    ///< Zastinovana barva povrchu (nebo barva pozadi pri prostrelu).
+	float   tHit;     ///< Parametr t paprsku v bode zasahu; FLT_MAX pokud nebyla zasazena zadna geometrie.
+	bool    hasHit;   ///< true pokud byl zasazen trojuhelnik.
 };
 
-// Represents a transformation in 3D space, including position, scale, and rotation
+/// @brief Reprezentuje transformaci 3D objektu (pozice, meritko, rotace).
 struct Transform {
-	Vector3 position = Vector3(0.0f, 0.0f, 0.0f); // Position in 3D space
-	Vector3 scale = Vector3(1.0f, 1.0f, 1.0f);    // Scale factors along each axis
-	Vector3 rotation = Vector3(0.0f, 0.0f, 0.0f); // Euler angles in degrees
+	Vector3 position = Vector3(0.0f, 0.0f, 0.0f); ///< Pozice ve svetovem prostoru.
+	Vector3 scale    = Vector3(1.0f, 1.0f, 1.0f); ///< Meritkove faktory podel kazde osy.
+	Vector3 rotation = Vector3(0.0f, 0.0f, 0.0f); ///< Eulerovy uhly ve stupnich.
 };
 
-// Stores information about a 3D model, including its file path and transformation
+/// @brief Informace o 3D modelu pro nacteni do sceny.
 struct ModelInfo {
-	std::string filePath; // Path to the OBJ model file
-	Transform transform;  // Transformation to apply to the model
+	std::string filePath; ///< Cesta k souboru OBJ.
+	Transform   transform; ///< Transformace aplikovana na model po nacteni.
 };
 
 
@@ -88,13 +88,13 @@ struct ModelInfo {
 // Dopredna deklarace -- RayTracerUI je friend a implementuje Ui() panel
 class RayTracerUI;
 
-// Main ray tracer class, inheriting from SimpleGuiDX11 for GUI and rendering support
+// Hlavni trida rendereru -- dedicnost z SimpleGuiDX11 pro GUI a prezentaci vysledku
 class RayTracer : public SimpleGuiDX11
 {
 	friend class RayTracerUI;
 public:
 	//=============================================================================
-	// INITIALIZATION & CLEANUP
+	// INICIALIZACE A UKLID
 	//=============================================================================
 
 	// Constructor: Initializes the hybrid ray tracer with the given parameters
@@ -106,7 +106,7 @@ public:
 	~RayTracer();
 
 	//=============================================================================
-	// INTEL EMBREE MANAGEMENT (Surface Ray Tracing)
+	// SPRAVA EMBREE (Povrchove sledovani paprsku)
 	//=============================================================================
 
 	// Initializes the Intel Embree device and scene for triangle mesh ray tracing
@@ -116,7 +116,7 @@ public:
 	int releaseDeviceAndScene();
 
 	//=============================================================================
-	// SCENE LOADING & SETUP
+	// NACITANI A KONFIGURACE SCENY
 	//=============================================================================
 
 	// Loads a complete scene with polygon models, volumetric shapes, and environment map
@@ -130,14 +130,14 @@ public:
 	void loadModel(const std::string& fileName, const Transform& transform = Transform());
 
 	//=============================================================================
-	// RAY TRACING UTILITIES
+	// POMOCNE FUNKCE SLEDOVANI PAPRSKU
 	//=============================================================================
 
 	// Checks if a point is visible from a light source (shadow ray test)
 	[[nodiscard]] bool isHitPointVisible(const Vector3& hitPoint, const Vector3& lightPoint) const;
 
 	//=============================================================================
-	// RENDERING PIPELINE
+	// RENDEROVACI PIPELINE
 	//=============================================================================
 
 	// Computes the color of a single pixel using hybrid rendering pipeline
@@ -162,7 +162,7 @@ public:
 	[[nodiscard]] Vector3 tracePath(const RTCRay& ray, int maxDepth) const;
 
 	//=============================================================================
-	// SURFACE SHADING MODELS (for Embree-traced triangle meshes)
+	// POVRCHOVE SHADERY (pro geometrii sledovanou Embree)
 	//=============================================================================
 
 	Vector3 normalShader(const Vector3& normalVector); // Visualizes normals as RGB colors
@@ -184,7 +184,7 @@ public:
 	Vector4 surfaceEffect(const RTCRay& ray);
 
 	//=============================================================================
-	// USER INTERFACE
+	// UZIVATELSKE ROZHRANI
 	//=============================================================================
 
 	// Renders the ImGui interface for controlling ray tracing parameters
@@ -194,7 +194,7 @@ public:
 	// They are accessible from Ui() and all other member functions without restriction.
 
 	//=============================================================================
-	// VDB VOLUME MANAGEMENT
+	// SPRAVA VDB OBJEMU
 	//=============================================================================
 
 	//! Initialize OpenVKL for VDB volume rendering
@@ -237,7 +237,7 @@ public:
 	Vector4 renderPixel(const RTCRay& ray);
 
 	//=============================================================================
-// DYNAMIC MODEL LOADING
+// DYNAMICKE NACITANI MODELU
 //=============================================================================
 
 // Load OBJ model dynamically during runtime.
