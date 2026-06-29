@@ -100,7 +100,7 @@ public:
     [[nodiscard]] std::vector<EntityAnimState>&       getEntityAnims()       { return activeEntityAnims_; }
     [[nodiscard]] const std::vector<EntityAnimState>& getEntityAnims() const { return activeEntityAnims_; }
 
-    /// @brief Resetuje vsechny aktivni animace (vola se pri ClearScene).
+    /// @brief Resetuje vsechny aktivni animace (vola se pri clearScene).
     void clearAnimations();
 
     [[nodiscard]] float getSceneTime() const { return sceneTime_; }

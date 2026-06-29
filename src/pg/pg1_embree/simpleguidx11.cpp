@@ -4,6 +4,9 @@
 #include <fstream>
 #include <sstream>
 #include <iomanip>
+#include <numeric>
+#include <algorithm>
+#include <random>
 #include <experimental/filesystem>
 #include <opencv2/opencv.hpp>
 
@@ -131,10 +134,23 @@ void SimpleGuiDX11::Producer()
 				MoveCamera();
 			}
 
-			// compute rendering
-#pragma omp parallel for
-			for (int y = 0; y < height_; ++y)
+			// Shuffled-row rendering: build a row-index vector, randomise it once per
+			// frame, then hand it to the OMP loop.  Each thread works on whatever row
+			// the scheduler gives it next (dynamic,1), but because "fast" sky rows and
+			// "slow" volumetric rows are interleaved throughout the index array, every
+			// thread gets a balanced mix.  This makes completedRows_ climb steadily and
+			// the ETA remain stable instead of jumping early then stalling at the end.
+			std::vector<int> rowIndices(height_);
+			std::iota(rowIndices.begin(), rowIndices.end(), 0);
+			std::shuffle(rowIndices.begin(), rowIndices.end(),
+			             std::mt19937{ std::random_device{}() });
+
+#pragma omp parallel for schedule(dynamic, 1)
+			for (int i = 0; i < height_; ++i)
 			{
+				// i is the iteration step; y is the physical image row for this step.
+				const int y = rowIndices[i];
+
 				for (int x = 0; x < width_; ++x)
 				{
 					const Color4f pixel = GetPixel(x, y, t);

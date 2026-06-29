@@ -1,4 +1,4 @@
-#ifndef RAYTRACER_H_
+﻿#ifndef RAYTRACER_H_
 #define RAYTRACER_H_
 
 #include "simpleguidx11.h"
@@ -110,31 +110,31 @@ public:
 	//=============================================================================
 
 	// Initializes the Intel Embree device and scene for triangle mesh ray tracing
-	int InitDeviceAndScene(const char* config);
+	int initDeviceAndScene(const char* config);
 
 	// Releases the Intel Embree device and scene
-	int ReleaseDeviceAndScene();
+	int releaseDeviceAndScene();
 
 	//=============================================================================
 	// SCENE LOADING & SETUP
 	//=============================================================================
 
 	// Loads a complete scene with polygon models, volumetric shapes, and environment map
-	void LoadScene(
+	void loadScene(
 		const std::vector<ModelInfo>& models, // List of OBJ models for surface rendering
 		const std::vector<Shape*>& shapes,    // List of SDF shapes for volumetric rendering
 		const char* cubeMapFileNames[6]       // File paths for the cubemap textures
 	);
 
 	// Loads a single 3D model (OBJ) and applies the given transformation
-	void LoadModel(const std::string& fileName, const Transform& transform = Transform());
+	void loadModel(const std::string& fileName, const Transform& transform = Transform());
 
 	//=============================================================================
 	// RAY TRACING UTILITIES
 	//=============================================================================
 
 	// Checks if a point is visible from a light source (shadow ray test)
-	[[nodiscard]] bool IsHitPointVisible(const Vector3& hitPoint, const Vector3& lightPoint) const;
+	[[nodiscard]] bool isHitPointVisible(const Vector3& hitPoint, const Vector3& lightPoint) const;
 
 	//=============================================================================
 	// RENDERING PIPELINE
@@ -147,41 +147,41 @@ public:
 	void MoveCamera() override;
 
 	// Main ray tracing function: Traces a ray through the scene using Intel Embree
-	Vector3 TraceRay(const RTCRay& ray, const float n_1 = 1.0f, const int depth = 0, const int maxDepth = 10);
+	Vector3 traceRay(const RTCRay& ray, const float n_1 = 1.0f, const int depth = 0, const int maxDepth = 10);
 
 	// Extended ray query: returns shaded color AND the Embree hit distance (tHit).
 	// Used by COMBINED_SDF mode so the volume marcher can stop at the surface boundary.
-	SurfaceHit TraceRayExtended(const RTCRay& ray, const float n_1 = 1.0f, const int depth = 0, const int maxDepth = 10);
+	SurfaceHit traceRayExtended(const RTCRay& ray, const float n_1 = 1.0f, const int depth = 0, const int maxDepth = 10);
 
 	// -----------------------------------------------------------------------
-	// PATH TRACING PIPELINE  (does not touch Whitted TraceRay / shader functions)
+	// PATH TRACING PIPELINE  (does not touch Whitted traceRay / shader functions)
 	// -----------------------------------------------------------------------
 
 	/// Iterative Monte Carlo path tracer.  Accumulates one path sample.
 	/// Call ptSamplesPerPixel_ times and average for a converged estimate.
-	[[nodiscard]] Vector3 TracePath(const RTCRay& ray, int maxDepth) const;
+	[[nodiscard]] Vector3 tracePath(const RTCRay& ray, int maxDepth) const;
 
 	//=============================================================================
 	// SURFACE SHADING MODELS (for Embree-traced triangle meshes)
 	//=============================================================================
 
-	Vector3 NormalShader(const Vector3& normalVector); // Visualizes normals as RGB colors
-	Vector3 LambertShader(const Material& material, const Coord2f& texCoord, const Vector3& hitPoint, const Vector3& normalVector); // Diffuse-only shading
-	Vector3 PhongShader(const Material& material, const Coord2f& texCoord, const Vector3& hitPoint, const Vector3& normalVector, const Vector3& directionVector, const int depth); // Diffuse + specular highlights
-	Vector3 TransparentShader(const RTCRay& ray, const Vector3& hitPoint, const Vector3& normalVector, const Vector3& directionVector, const Material& material, const float n_1, const int depth); // Glass with Fresnel reflections
+	Vector3 normalShader(const Vector3& normalVector); // Visualizes normals as RGB colors
+	Vector3 lambertShader(const Material& material, const Coord2f& texCoord, const Vector3& hitPoint, const Vector3& normalVector); // Diffuse-only shading
+	Vector3 phongShader(const Material& material, const Coord2f& texCoord, const Vector3& hitPoint, const Vector3& normalVector, const Vector3& directionVector, const int depth); // Diffuse + specular highlights
+	Vector3 transparentShader(const RTCRay& ray, const Vector3& hitPoint, const Vector3& normalVector, const Vector3& directionVector, const Material& material, const float n_1, const int depth); // Glass with Fresnel reflections
 
 	//=============================================================================
 	// VOLUMETRIC RENDERING (SDF-based procedural shapes)
 	//=============================================================================
 
 	// Dispatcher: Chooses between surface (sphere tracing) and volume (ray marching) rendering
-	Vector4 VolumetricRender(const RTCRay& ray);
+	Vector4 volumetricRender(const RTCRay& ray);
 
 	// RAY MARCHING: True volumetric rendering with Beer-Lambert absorption
-	Vector4 VolumetricEffect(const RTCRay& ray, float tMax = FLT_MAX);
+	Vector4 volumetricEffect(const RTCRay& ray, float tMax = FLT_MAX);
 
 	// SPHERE TRACING: Surface-only rendering of SDF shapes using adaptive stepping
-	Vector4 SurfaceEffect(const RTCRay& ray);
+	Vector4 surfaceEffect(const RTCRay& ray);
 
 	//=============================================================================
 	// USER INTERFACE
@@ -198,29 +198,29 @@ public:
 	//=============================================================================
 
 	//! Initialize OpenVKL for VDB volume rendering
-	bool InitializeOpenVKL();
+	bool initializeOpenVKL();
 
 	//! Load VDB file and set up volume for rendering
-	bool LoadVdbVolume(const std::string& filename, const std::string& gridName = "density");
+	bool loadVdbVolume(const std::string& filename, const std::string& gridName = "density");
 
 	//! Clean up OpenVKL resources
-	void CleanupOpenVKL();
+	void cleanupOpenVKL();
 
 	//! VDB Volume ray marching implementation
-	Vector4 VdbVolumeRayMarching(const RTCRay& ray, bool compositeBg = true);
+	Vector4 vdbVolumeRayMarching(const RTCRay& ray, bool compositeBg = true);
 
 	//! Check if VDB volume is loaded (delegates to VdbRenderer)
-	[[nodiscard]] bool HasVdbVolume() const;
+	[[nodiscard]] bool hasVdbVolume() const;
 
 	//! Get VDB volume bounding box
-	void GetVdbVolumeBounds(Vector3& minBounds, Vector3& maxBounds) const;
+	void getVdbVolumeBounds(Vector3& minBounds, Vector3& maxBounds) const;
 
 	//! Get current FPS
-	float GetCurrentFPS() const;
+	float getCurrentFPS() const;
 
 
-	void SetRenderingMode(RenderingMode mode) { currentRenderingMode_ = mode; }
-	RenderingMode GetRenderingMode() const { return currentRenderingMode_; }
+	void setRenderingMode(RenderingMode mode) { currentRenderingMode_ = mode; }
+	RenderingMode getRenderingMode() const { return currentRenderingMode_; }
 
 	//=============================================================================
 // SCENE MANAGEMENT
@@ -228,13 +228,13 @@ public:
 
 
 	// Load a predefined scene configuration
-	void LoadPredefinedScene(SceneType type);
+	void loadPredefinedScene(SceneType type);
 
 	// Update scene animation (called each frame)
-	void UpdateScene(float time);
+	void updateScene(float time);
 
 	// Main pixel rendering dispatch
-	Vector4 RenderPixel(const RTCRay& ray);
+	Vector4 renderPixel(const RTCRay& ray);
 
 	//=============================================================================
 // DYNAMIC MODEL LOADING
@@ -243,13 +243,13 @@ public:
 // Load OBJ model dynamically during runtime.
 	// If animOut is non-null the geometry uses shared vertex buffers so the
 	// positions can be updated each frame; state is written into *animOut.
-	bool LoadObjModel(const std::string& fileName, EntityAnimState* animOut = nullptr);
+	bool loadObjModel(const std::string& fileName, EntityAnimState* animOut = nullptr);
 
 	// Clear all loaded surface models
-	void ClearSurfaceModels();
+	void clearSurfaceModels();
 
 	// Get number of loaded models
-	int GetLoadedModelCount() const { return static_cast<int>(surfaces_.size()); }
+	int getLoadedModelCount() const { return static_cast<int>(surfaces_.size()); }
 
 
 private:
@@ -268,7 +268,7 @@ private:
 	// =========================================================================
 
 	RTCDevice device_;      ///< Embree device handle
-	RTCScene  scene_;       ///< Active scene — rebuilt by ClearSurfaceModels()
+	RTCScene  scene_;       ///< Active scene — rebuilt by clearSurfaceModels()
 
 	// =========================================================================
 	// SCENE GEOMETRY & ASSETS  (smart-pointer ownership)
@@ -297,7 +297,7 @@ private:
 	std::unique_ptr<CubeMap> cubemap_;
 
 	// =========================================================================
-	// VDB RENDERER (OpenVKL subsystem � zapouzdreno v samostatne tride)
+	// VDB RENDERER (OpenVKL subsystem � zapouzdreno v samostatne tride)
 	// =========================================================================
 
 	/// Vlastni cely OpenVKL subsystem (device, volume, sampler, loader).
@@ -320,7 +320,7 @@ private:
 	// =========================================================================
 
 	Camera             camera_;  ///< Pin-hole camera for primary ray generation
-	Light              light_;   ///< Legacy single-light (Lambert/Phong/SurfaceEffect)
+	Light              light_;   ///< Legacy single-light (Lambert/Phong/surfaceEffect)
 	std::vector<Light> lights_;  ///< Multi-light list for volumetric illumination
 
 	// =========================================================================
@@ -349,7 +349,7 @@ private:
 
 	// --- Path tracing ---
 	int   ptMaxDepth_{ 8 };        ///< Max path length before hard termination
-	int   ptSamplesPerPixel_{ 4 }; ///< Samples accumulated per RenderPixel call
+	int   ptSamplesPerPixel_{ 4 }; ///< Samples accumulated per renderPixel call
 	int   ptRRMinDepth_{ 3 };      ///< Bounce depth at which Russian Roulette begins
 
 	// --- Whitted surface tracing ---
@@ -404,11 +404,11 @@ private:
 	RenderingMode      currentRenderingMode_{ RenderingMode::SURFACE_EMBREE };
 	SceneType          currentScene_{ SceneType::SCENE_SHADERTOY_SDF };
 	float              sceneTime_{ 0.0f }; ///< Casovac animace sceny (sekund)
-	/// High-level render filter — set by the UI, consumed by ResolveActiveMode().
+	/// High-level render filter — set by the UI, consumed by resolveActiveMode().
 	/// Cached into currentRenderingMode_ once per frame in MoveCamera().
 	GlobalRenderFilter currentFilter_{ GlobalRenderFilter::COMBINED };
 
-	/// If true, ResolveActiveMode() selects a path-tracing pipeline for the mesh.
+	/// If true, resolveActiveMode() selects a path-tracing pipeline for the mesh.
 	bool objUsePathTracing_{ false };
 
 	// =========================================================================
@@ -483,7 +483,7 @@ private:
 	/// Seeded to -1 so the first valid sample initialises it directly (no warm-up lag).
 	float smoothedEta_{-1.0f};
 
-	/// Translation offsets applied each frame by UpdateEntityTransforms().
+	/// Translation offsets applied each frame by updateEntityTransforms().
 	/// Ray-march code subtracts these offsets from sample positions to simulate
 	/// the SDF/VDB volume being displaced from the world origin.
 	Vector3 sdfAnimOffset_{0.0f, 0.0f, 0.0f};
@@ -493,16 +493,16 @@ private:
 	// PRIVATE HELPER METHODS
 	// =========================================================================
 
-	void InitializeFixedSdfScene();
-	void UpdateCameraPosition();
+	void initializeFixedSdfScene();
+	void updateCameraPosition();
 
 	/// Recomputes and uploads animated entity transforms for the current frame.
 	/// For MESH entities: re-fills shared Embree vertex buffers and re-commits.
 	/// For SDF/VDB entities: updates sdfAnimOffset_ / vdbAnimOffset_ offsets.
-	/// Called from UpdateScene() on the main thread between frames.
-	void UpdateEntityTransforms(float time);
-	void HandleLeftMouseDrag(const ImVec2& mouseDelta);
-	void HandleRightMouseDrag(const ImVec2& mouseDelta);
+	/// Called from updateScene() on the main thread between frames.
+	void updateEntityTransforms(float time);
+	void handleLeftMouseDrag(const ImVec2& mouseDelta);
+	void handleRightMouseDrag(const ImVec2& mouseDelta);
 
 	/// Tears down ALL scene assets atomically under a unique_lock, ensuring
 	/// every in-flight GetPixel() call (which holds a shared_lock) has
@@ -512,11 +512,11 @@ private:
 	///   - VdbLoader (clears stale grid / bounding-box caches)
 	///   - Volumetric SDF observer list (fixedSdfScene_ ownership untouched)
 	/// Do NOT hold sceneMutex_ before calling this function.
-	void ClearScene();
+	void clearScene();
 
 	/// Clears current geometry/volume, configures lights, loads assets described
 	/// by @p desc, and sets the rendering mode specified by the scene entry.
-	void LoadSceneFromDescription(const SceneDescription& desc);
+	void loadSceneFromDescription(const SceneDescription& desc);
 
 	/// Sestavi SdfRenderContext z aktualniho (frame-stabilniho) stavu rendereru.
 	[[nodiscard]] SdfRenderContext buildSdfContext() const;
@@ -529,12 +529,12 @@ private:
 
 	/// Maps a mode token string to the RenderingMode enum (kept for legacy/debug use).
 	/// Defaults to SURFACE_EMBREE for unrecognised strings.
-	RenderingMode ModeFromString(const std::string& modeStr) const;
+	RenderingMode modeFromString(const std::string& modeStr) const;
 
 	/// Derives the active RenderingMode from currentFilter_ and objUsePathTracing_,
 	/// taking into account which assets are actually loaded.
 	/// Called once per frame from MoveCamera() to update currentRenderingMode_.
-	RenderingMode ResolveActiveMode() const;
+	RenderingMode resolveActiveMode() const;
 
 	/// Marches a secondary shadow ray through the SDF volume (Beer-Lambert).
 	/// @returns Transmittance ∈ [0,1]; 1=fully lit, 0=fully shadowed.
@@ -542,30 +542,30 @@ private:
 		const Vector3& samplePoint, const Vector3& lightPos) const;
 
 	/// Evaluates the normalised Henyey-Greenstein phase function.
-	[[nodiscard]] static float EvaluateHenyeyGreenstein(float cosTheta, float g);
+	[[nodiscard]] static float evaluateHenyeyGreenstein(float cosTheta, float g);
 
 	// --- Path tracing helpers ---
 
 	/// Balanced MIS heuristic (Veach 1997, n_i = 1, n = 2):
 	///   w_a = p_a / (p_a + p_b)
 	/// For delta (point) lights p_b→0, so w_a = 1 (reduces to pure NEE).
-	[[nodiscard]] static float BalancedHeuristic(float p_a, float p_b);
+	[[nodiscard]] static float balancedHeuristic(float p_a, float p_b);
 
 	/// Builds a right-handed orthonormal basis (Duff et al. 2017).
 	/// @param n   Unit surface normal (the "up" axis of the basis).
 	/// @param t   Output tangent vector.
 	/// @param b   Output bitangent vector.
-	static void BuildONB(const Vector3& n, Vector3& t, Vector3& b);
+	static void buildONB(const Vector3& n, Vector3& t, Vector3& b);
 
 	/// Generates a cosine-weighted direction on the hemisphere around @p normal.
 	/// PDF = cos(θ)/π.  With a Lambertian BRDF the weight reduces to albedo.
-	[[nodiscard]] static Vector3 SampleHemisphereCosine(const Vector3& normal);
+	[[nodiscard]] static Vector3 sampleHemisphereCosine(const Vector3& normal);
 
 	/// Evaluates direct illumination at a surface point via Next Event Estimation.
 	/// Iterates over all scene lights, casts shadow rays, and accumulates
 	/// the Lambert BRDF-weighted contribution.  No PDF division needed for
 	/// point/directional lights (delta distributions).
-	[[nodiscard]] Vector3 SampleDirectLightPT(
+	[[nodiscard]] Vector3 sampleDirectLightPT(
 		const Vector3& hitPoint,
 		const Vector3& normal,
 		const Vector3& albedo) const;

@@ -2,13 +2,13 @@
 #include "raytracer.h"
 #include "objloader.h"
 
-void RayTracer::LoadPredefinedScene(SceneType type)
+void RayTracer::loadPredefinedScene(SceneType type)
 {
 	currentScene_ = type;
 	sceneTime_    = 0.0f;
 	lights_.clear();
 
-	// Clear any data-driven animation state so UpdateScene falls back to the
+	// Clear any data-driven animation state so updateScene falls back to the
 	// legacy hardcoded animation path when this function is called directly.
 	sceneManager_->getLightDescs().clear();
 
@@ -43,19 +43,19 @@ void RayTracer::LoadPredefinedScene(SceneType type)
 		rayMarching_          = true;
 
 		// Position camera to give a good view of the SDF cloud.
-		// IMPORTANT: UpdateCameraPosition() always orbits around the world ORIGIN
+		// IMPORTANT: updateCameraPosition() always orbits around the world ORIGIN
 		// (hardcoded viewAt = (0,0,0)).  We must use that SAME origin here so that
 		// the azimuth/elevation stored in cameraAzimuth_/cameraElevation_ exactly
-		// reproduce kRefPos when UpdateCameraPosition is first called on mouse drag,
+		// reproduce kRefPos when updateCameraPosition is first called on mouse drag,
 		// preventing the violent camera snap.
 		const Vector3 kRefPos(0.0f, 40.0f, -100.0f);
-		const Vector3 kRefAt(0.0f, 0.0f, 0.0f);  // MUST match UpdateCameraPosition's hardcoded origin
+		const Vector3 kRefAt(0.0f, 0.0f, 0.0f);  // MUST match updateCameraPosition's hardcoded origin
 		camera_.SetViewFrom(kRefPos);
 		camera_.SetViewAt(kRefAt);
 		cameraX_ = kRefPos.x;
 		cameraY_ = kRefPos.y;
 		cameraZ_ = kRefPos.z;
-		// Reverse-project into the Y-up spherical coordinates used by UpdateCameraPosition:
+		// Reverse-project into the Y-up spherical coordinates used by updateCameraPosition:
 		//   x = dist*cos(el)*cos(az)   y = dist*sin(el)   z = dist*cos(el)*sin(az)
 		cameraDistance_  = kRefPos.L2Norm();
 		cameraAzimuth_   = rad2deg(atan2f(kRefPos.z, kRefPos.x)); // XZ plane
@@ -106,7 +106,7 @@ void RayTracer::LoadPredefinedScene(SceneType type)
 //===========================================================================
 
 RenderingMode enum.
-RenderingMode RayTracer::ModeFromString(const std::string& modeStr) const
+RenderingMode RayTracer::modeFromString(const std::string& modeStr) const
 {
 	if (modeStr == "VOLUMETRIC_SDF")      return RenderingMode::VOLUMETRIC_SDF;
 	if (modeStr == "VOLUMETRIC_VDB")      return RenderingMode::VOLUMETRIC_VDB;
@@ -121,10 +121,10 @@ RenderingMode RayTracer::ModeFromString(const std::string& modeStr) const
 /// checking which assets are actually loaded so invalid combinations are avoided.
 /// Called from MoveCamera() each frame to update currentRenderingMode_ before
 /// the OMP pixel dispatch, ensuring thread-safe read of a stable cached value.
-RenderingMode RayTracer::ResolveActiveMode() const
+RenderingMode RayTracer::resolveActiveMode() const
 {
 	const bool hasMesh = !surfaces_.empty();
-	const bool hasVdb  = HasVdbVolume();
+	const bool hasVdb  = hasVdbVolume();
 
 	switch (currentFilter_) {
 
@@ -167,12 +167,12 @@ RenderingMode RayTracer::ResolveActiveMode() const
 /// Loads all assets described by @p desc and sets the engine into the
 /// correct rendering mode.  Sequence:
 ///   1. Release previously loaded geometry / volume (safe under scene mutex).
-///   2. Call the legacy LoadPredefinedScene to configure lights and camera
+///   2. Call the legacy loadPredefinedScene to configure lights and camera
 ///      to sensible defaults matching the entity type.
 ///   3. Load actual file assets (OBJ / VDB).  SDF shapes need no file load.
-///   4. Restore the rendering mode specified in the .scn file (LoadObjModel
+///   4. Restore the rendering mode specified in the .scn file (loadObjModel
 ///      hard-codes SURFACE_EMBREE, so we override it here).
-void RayTracer::LoadSceneFromDescription(const SceneDescription& desc)
+void RayTracer::loadSceneFromDescription(const SceneDescription& desc)
 {
 	// Drain any in-flight render frames before swapping scene assets.
 	// Save the caller's pause state and restore it afterwards so a manually
@@ -191,21 +191,21 @@ void RayTracer::LoadSceneFromDescription(const SceneDescription& desc)
 	}
 
 	// --- Atomically drain render threads and tear down all stale assets ------
-	// ClearScene() acquires sceneMutex_ as unique_lock, which blocks until
+	// clearScene() acquires sceneMutex_ as unique_lock, which blocks until
 	// every in-flight GetPixel() shared_lock holder has returned.  This is the
 	// only serialisation point needed to prevent Embree/VDB/texture crashes.
-	// NOTE: LoadObjModel() and LoadVdbVolume() each take their own unique_lock
+	// NOTE: loadObjModel() and loadVdbVolume() each take their own unique_lock
 	// internally, so the lock is fully released before those calls are made.
-	ClearScene();
+	clearScene();
 
 	// --- Call legacy setup for Embree/VKL context + SDF volumetric shapes ---
 	// This also clears activeLightDescs_ and lights_ (we rebuild them below).
 	if (hasMesh)
-		LoadPredefinedScene(SceneType::SCENE_CUSTOM_OBJ);
+		loadPredefinedScene(SceneType::SCENE_CUSTOM_OBJ);
 	else if (hasVdb)
-		LoadPredefinedScene(SceneType::SCENE_CUSTOM_VDB);
+		loadPredefinedScene(SceneType::SCENE_CUSTOM_VDB);
 	else
-		LoadPredefinedScene(SceneType::SCENE_SHADERTOY_SDF);
+		loadPredefinedScene(SceneType::SCENE_SHADERTOY_SDF);
 
 	sceneTime_ = 0.0f;
 
@@ -230,7 +230,7 @@ void RayTracer::LoadSceneFromDescription(const SceneDescription& desc)
 
 	// --- Apply lights from the .scn description ------------------------------
 	// Rebuilding lights_ from the parsed descriptors replaces any lights that
-	// LoadPredefinedScene installed above.
+	// loadPredefinedScene installed above.
 	if (!desc.lights.empty()) {
 		lights_.clear();
 		for (const auto& ld : desc.lights) {
@@ -248,12 +248,12 @@ void RayTracer::LoadSceneFromDescription(const SceneDescription& desc)
 			l.intensity = 1.0f;
 			lights_.push_back(l);
 		}
-		// Store descriptors so UpdateScene can drive per-frame ORBIT animation.
+		// Store descriptors so updateScene can drive per-frame ORBIT animation.
 		sceneManager_->getLightDescs() = desc.lights;
 		std::cout << "[SceneLoader] " << lights_.size() << " light(s) applied from .scn\n";
 	}
-	// If no lights defined in .scn, the lights from LoadPredefinedScene remain
-	// (activeLightDescs_ is empty â†’ legacy animation path in UpdateScene).
+	// If no lights defined in .scn, the lights from loadPredefinedScene remain
+	// (activeLightDescs_ is empty â†’ legacy animation path in updateScene).
 
 	// --- Load file assets and register entity animation state ----------------
 	for (const auto& e : desc.entities) {
@@ -275,17 +275,17 @@ void RayTracer::LoadSceneFromDescription(const SceneDescription& desc)
 				anim.entityKind = "MESH";
 				fillAnim(anim);
 				// Mesh is loaded at the OBJ origin; base position is (0,0,0).
-				if (LoadObjModel(e.value, &anim))
+				if (loadObjModel(e.value, &anim))
 					sceneManager_->getEntityAnims().push_back(std::move(anim));
 				else
 					std::cout << "[SceneLoader] Failed to load MESH: " << e.value << "\n";
 			} else {
-				if (!LoadObjModel(e.value))
+				if (!loadObjModel(e.value))
 					std::cout << "[SceneLoader] Failed to load MESH: " << e.value << "\n";
 			}
 		}
 		else if (e.type == "VDB") {
-			if (!LoadVdbVolume(e.value, "density"))
+			if (!loadVdbVolume(e.value, "density"))
 				std::cout << "[SceneLoader] Failed to load VDB: " << e.value << "\n";
 			if (hasAnim) {
 				EntityAnimState anim;
@@ -305,7 +305,7 @@ void RayTracer::LoadSceneFromDescription(const SceneDescription& desc)
 		}
 	}
 
-	// currentRenderingMode_ is now set each frame by ResolveActiveMode() in MoveCamera().
+	// currentRenderingMode_ is now set each frame by resolveActiveMode() in MoveCamera().
 
 	std::cout << "[SceneLoader] Scene \"" << desc.name
 	          << "\" ready  (lights: " << lights_.size() << ")\n";
@@ -322,7 +322,7 @@ void RayTracer::LoadSceneFromDescription(const SceneDescription& desc)
 
 /// Advances the scene simulation to the given time.
 ///
-/// DATA-DRIVEN PATH (scenes.scn loaded via LoadSceneFromDescription):
+/// DATA-DRIVEN PATH (scenes.scn loaded via loadSceneFromDescription):
 ///   Iterates over activeLightDescs_.  For each POINT light with animType=="ORBIT"
 ///   the position is updated in the XZ plane around the light's base position:
 ///     x = base_x + cos(t * speed + phase) * radius
@@ -330,7 +330,7 @@ void RayTracer::LoadSceneFromDescription(const SceneDescription& desc)
 ///     y = base_y  (unchanged â€” orbit is around the Y axis)
 ///   DIRECTIONAL lights and lights with no animType are left untouched.
 ///
-/// LEGACY PATH (loaded via LoadPredefinedScene directly):
+/// LEGACY PATH (loaded via loadPredefinedScene directly):
 ///   Preserves the original hardcoded ShaderToy SDF orbit for backward compat.
 ///
 /// THREAD SAFETY: called from MoveCamera() on the main/UI thread, between
@@ -340,7 +340,7 @@ void RayTracer::LoadSceneFromDescription(const SceneDescription& desc)
 /// update precedes the next frame's pixel dispatch.
 ///
 /// @param time  Accumulated scene time in seconds.
-void RayTracer::UpdateScene(const float time)
+void RayTracer::updateScene(const float time)
 {
 	sceneTime_ = time;
 	// Sestavi zdroje pro SceneManager a deleguj aktualizaci animaci
@@ -360,7 +360,7 @@ void RayTracer::UpdateScene(const float time)
 // ENTITY TRANSFORMACE -- deleguje na SceneManager
 //=============================================================================
 
-void RayTracer::UpdateEntityTransforms(const float time)
+void RayTracer::updateEntityTransforms(const float time)
 {
 	SceneAnimResources res{
 		lights_,

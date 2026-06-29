@@ -16,7 +16,7 @@ int RayTracerUI::build()
 
 	// === HEADER INFO ===
 	ImGui::Text("Surfaces: %d | Materials: %d", rt_.surfaces_.size(), rt_.materials_.size());
-	const float currentFPS = rt_.GetCurrentFPS();
+	const float currentFPS = rt_.getCurrentFPS();
 	if (currentFPS > 0.0f)
 		ImGui::Text("FPS: %.1f (%.3f ms/frame)", currentFPS, 1000.0f / currentFPS);
 	else
@@ -95,7 +95,7 @@ int RayTracerUI::build()
 		if (ImGui::Combo("##scnscene", &selIdx,
 		                 sceneNamePtrs.data(), static_cast<int>(sceneNamePtrs.size()))) {
 			rt_.sceneManager_->setSelectedIndex(selIdx);
-			rt_.LoadSceneFromDescription(rt_.sceneManager_->getSelectedScene());
+			rt_.loadSceneFromDescription(rt_.sceneManager_->getSelectedScene());
 		}
 		ImGui::PopItemWidth();
 
@@ -175,11 +175,11 @@ int RayTracerUI::build()
 		ImVec2 mouseDelta = ImVec2(mousePos.x - rt_.lastMousePos_.x, mousePos.y - rt_.lastMousePos_.y);
 		if (ImGui::IsMouseDown(0)) {
 			if (!rt_.leftMouseDragging_) { rt_.leftMouseDragging_ = true; rt_.lastMousePos_ = mousePos; }
-			else rt_.HandleLeftMouseDrag(mouseDelta);
+			else rt_.handleLeftMouseDrag(mouseDelta);
 		} else { rt_.leftMouseDragging_ = false; }
 		if (ImGui::IsMouseDown(1)) {
 			if (!rt_.rightMouseDragging_) { rt_.rightMouseDragging_ = true; rt_.lastMousePos_ = mousePos; }
-			else rt_.HandleRightMouseDrag(mouseDelta);
+			else rt_.handleRightMouseDrag(mouseDelta);
 		} else { rt_.rightMouseDragging_ = false; }
 		rt_.lastMousePos_ = mousePos;
 	}
@@ -190,12 +190,12 @@ int RayTracerUI::build()
 	if (ImGui::CollapsingHeader("Camera")) {
 		ImGui::Text("Pos: (%.1f, %.1f, %.1f)  Dist: %.1f", rt_.cameraX_, rt_.cameraY_, rt_.cameraZ_, rt_.cameraDistance_);
 		ImGui::Text("Az: %.1f  El: %.1f", rt_.cameraAzimuth_, rt_.cameraElevation_);
-		if (ImGui::SliderFloat("Distance",  &rt_.cameraDistance_,  rt_.minCameraDistance_, rt_.maxCameraDistance_)) rt_.UpdateCameraPosition();
-		if (ImGui::SliderFloat("Azimuth",   &rt_.cameraAzimuth_,   0.0f,    360.0f)) rt_.UpdateCameraPosition();
-		if (ImGui::SliderFloat("Elevation", &rt_.cameraElevation_, -rt_.maxElevation_, rt_.maxElevation_)) rt_.UpdateCameraPosition();
+		if (ImGui::SliderFloat("Distance",  &rt_.cameraDistance_,  rt_.minCameraDistance_, rt_.maxCameraDistance_)) rt_.updateCameraPosition();
+		if (ImGui::SliderFloat("Azimuth",   &rt_.cameraAzimuth_,   0.0f,    360.0f)) rt_.updateCameraPosition();
+		if (ImGui::SliderFloat("Elevation", &rt_.cameraElevation_, -rt_.maxElevation_, rt_.maxElevation_)) rt_.updateCameraPosition();
 		if (ImGui::Button("Reset Camera", ImVec2(110, 25))) {
 			rt_.cameraDistance_ = 20.0f; rt_.cameraAzimuth_ = 0.0f; rt_.cameraElevation_ = 0.0f;
-			rt_.UpdateCameraPosition();
+			rt_.updateCameraPosition();
 		}
 	}
 

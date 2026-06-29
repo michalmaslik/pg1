@@ -23,11 +23,11 @@ void SceneManager::clearAnimations()
 {
     activeLightDescs_.clear();
     activeEntityAnims_.clear();
-    // sceneTime_ se nenuluje zde -- volajici to dela explicitne v LoadPredefinedScene
+    // sceneTime_ se nenuluje zde -- volajici to dela explicitne v loadPredefinedScene
 }
 
 //=============================================================================
-// AKTUALIZACE ANIMACI (Update + UpdateEntityTransforms)
+// AKTUALIZACE ANIMACI (Update + updateEntityTransforms)
 //=============================================================================
 
 void SceneManager::update(const float time, SceneAnimResources& res)
@@ -35,7 +35,7 @@ void SceneManager::update(const float time, SceneAnimResources& res)
     sceneTime_ = time;
 
     // -------------------------------------------------------------------
-    // DATA-DRIVEN CESTA -- naplnena LoadSceneFromDescription
+    // DATA-DRIVEN CESTA -- naplnena loadSceneFromDescription
     // -------------------------------------------------------------------
     if (!activeLightDescs_.empty()) {
         const size_t n = std::min(res.lights.size(), activeLightDescs_.size());
@@ -96,10 +96,10 @@ void SceneManager::updateEntityTransforms(const float time, SceneAnimResources& 
 {
     if (activeEntityAnims_.empty()) return;
 
-    // Sdileny zamek: ClearScene (unique_lock) musi cekat na dokonceni teto metody.
+    // Sdileny zamek: clearScene (unique_lock) musi cekat na dokonceni teto metody.
     std::shared_lock<std::shared_mutex> animLock(res.sceneMutex);
 
-    // Dvojita kontrola po zamknutni: ClearScene mohlo vymazat seznam
+    // Dvojita kontrola po zamknutni: clearScene mohlo vymazat seznam
     if (activeEntityAnims_.empty()) return;
 
     bool anyMeshUpdated = false;

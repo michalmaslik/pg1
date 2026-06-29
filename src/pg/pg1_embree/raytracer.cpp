@@ -1,4 +1,4 @@
-
+ï»¿
 
 #include "stdafx.h"
 #include "raytracer.h"
@@ -24,7 +24,7 @@ RayTracer::RayTracer(const int width, const int height,
 	std::cout << "[RAY TRACER] Initializing Ray Tracer..." << std::endl;
 
 	// Initialize Intel Embree device and scene for surface ray tracing
-	if (InitDeviceAndScene(config) != S_OK) {
+	if (initDeviceAndScene(config) != S_OK) {
 		throw std::runtime_error("Failed to initialize Embree device and scene");
 	}
 
@@ -35,7 +35,7 @@ RayTracer::RayTracer(const int width, const int height,
 	light_ = Light(lightOrigin);
 
 	// Initialize fixed SDF scene
-	InitializeFixedSdfScene();
+	initializeFixedSdfScene();
 
 	// Initialize camera orbital parameters (Y-up: azimuth in XZ plane, Y = elevation)
 	Vector3 currentViewFrom = camera_.GetViewFrom();
@@ -59,7 +59,7 @@ RayTracer::RayTracer(const int width, const int height,
 	pathTracer_ = std::make_unique<PathTracer>();
 	sceneManager_  = std::make_unique<SceneManager>();
 	uiController_  = std::make_unique<RayTracerUI>(*this);
-	if (!InitializeOpenVKL()) {
+	if (!initializeOpenVKL()) {
 		std::cerr << "[RAY TRACER WARNING] Failed to initialize OpenVKL" << std::endl;
 	}
 
@@ -85,7 +85,7 @@ RayTracer::RayTracer(const int width, const int height,
 	}
 
 	// Seed the default scene so lights_ and camera are correct from frame 1.
-	LoadPredefinedScene(SceneType::SCENE_SHADERTOY_SDF);
+	loadPredefinedScene(SceneType::SCENE_SHADERTOY_SDF);
 
 	// Load scene list from scenes.scn.  Try project-root relative path first
 	// (working directory is pg1_embree/, so 3 levels up reaches pg1/).
@@ -104,7 +104,7 @@ RayTracer::RayTracer(const int width, const int height,
 				break;
 			}
 		}
-		LoadSceneFromDescription(sceneManager_->getSelectedScene());
+		loadSceneFromDescription(sceneManager_->getSelectedScene());
 	}
 
 	std::cout << "[RAY TRACER] Ray Tracer initialized successfully" << std::endl;
@@ -113,15 +113,15 @@ RayTracer::RayTracer(const int width, const int height,
 RayTracer::~RayTracer()
 {
 	// Cleanup OpenVKL resources first
-	CleanupOpenVKL();
+	cleanupOpenVKL();
 
 	// fixedSdfScene_ and cubemap_ are unique_ptr â€” destroyed automatically at scope exit.
 	volumetricShapes_.clear();  // non-owning observer list
 
-	// ClearSurfaceModels releases scene_ and clears surfaces_/materials_ (unique_ptr auto-delete)
-	ClearSurfaceModels();
+	// clearSurfaceModels releases scene_ and clears surfaces_/materials_ (unique_ptr auto-delete)
+	clearSurfaceModels();
 
-	// Release the fresh empty scene created by ClearSurfaceModels, then the device
+	// Release the fresh empty scene created by clearSurfaceModels, then the device
 	rtcReleaseScene(scene_);
 	rtcReleaseDevice(device_);
 }
@@ -148,7 +148,7 @@ Color4f RayTracer::GetPixel(const int x, const int y, const float t)
 	}
 
 	// Shared lock: many render threads may hold this simultaneously.
-	// A unique_lock in LoadObjModel/LoadVdbVolume blocks until all renders finish.
+	// A unique_lock in loadObjModel/loadVdbVolume blocks until all renders finish.
 	std::shared_lock<std::shared_mutex> renderLock(sceneMutex_);
 
 	Vector3 finalColor(0.0f);
@@ -169,7 +169,7 @@ Color4f RayTracer::GetPixel(const int x, const int y, const float t)
 					float(y) + j * (1.0f / 4.0f) + ksi_y);
 
 				// Render based on current mode
-				Vector4 result = RenderPixel(ray);
+				Vector4 result = renderPixel(ray);
 				accumulator += Vector3(result.x, result.y, result.z);
 				alphaAccumulator += result.w;
 			}
@@ -183,7 +183,7 @@ Color4f RayTracer::GetPixel(const int x, const int y, const float t)
 	else {
 		// SINGLE SAMPLE: Trace one ray per pixel
 		RTCRay ray = camera_.GenerateRay(float(x), float(y));
-		Vector4 result = RenderPixel(ray);
+		Vector4 result = renderPixel(ray);
 		finalColor = Vector3(result.x, result.y, result.z);
 		finalAlpha = result.w;
 	}
@@ -207,7 +207,7 @@ Color4f RayTracer::GetPixel(const int x, const int y, const float t)
 	return Color4f{ finalColor.x, finalColor.y, finalColor.z, finalAlpha };
 }
 
-Vector4 RayTracer::RenderPixel(const RTCRay& ray) {
+Vector4 RayTracer::renderPixel(const RTCRay& ray) {
 	const Vector3 ro(ray.org_x, ray.org_y, ray.org_z);
 	const Vector3 rd(ray.dir_x, ray.dir_y, ray.dir_z);
 
@@ -250,7 +250,7 @@ Vector4 RayTracer::RenderPixel(const RTCRay& ray) {
 	// --- EMISSIVE SPHERE INTERSECTION (VOLUMETRIC_SDF only) ---------------
 	// Collect the nearest emissive sphere hit distance (tEmissive) and its
 	// colour.  We do NOT early-return here; instead tEmissive is passed as
-	// tMax to VolumetricEffect so the cloud march stops at the sphere and
+	// tMax to volumetricEffect so the cloud march stops at the sphere and
 	// correctly attenuates spheres that sit behind the volume.
 	float   tEmissive    = FLT_MAX;
 	Vector3 emissiveCol(0.0f);
@@ -286,36 +286,36 @@ Vector4 RayTracer::RenderPixel(const RTCRay& ray) {
 	// --- RENDER DISPATCH --------------------------------------------------
 	switch (currentRenderingMode_) {
 	case RenderingMode::SURFACE_EMBREE: {
-		const Vector3 sc = TraceRay(ray);
+		const Vector3 sc = traceRay(ray);
 		return Vector4(sc.x, sc.y, sc.z, 1.0f);
 	}
 	case RenderingMode::VOLUMETRIC_SDF: {
 		// March the volume only up to the nearest emissive sphere (tEmissive).
 		// Depth compositing:
-		//   - Sphere in front of cloud  Ôæå march exits early (low vol.w), sphere at full brightness
-		//   - Sphere behind cloud       Ôæå vol.w is large, sphere attenuated by remaining transmittance
-		//   - No sphere hit             Ôæå tEmissive == FLT_MAX, behaves like ordinary background
-		const Vector4 vol = VolumetricEffect(ray, tEmissive);
+		//   - Sphere in front of cloud  ï¿½ï¿½ï¿½ march exits early (low vol.w), sphere at full brightness
+		//   - Sphere behind cloud       ï¿½ï¿½ï¿½ vol.w is large, sphere attenuated by remaining transmittance
+		//   - No sphere hit             ï¿½ï¿½ï¿½ tEmissive == FLT_MAX, behaves like ordinary background
+		const Vector4 vol = volumetricEffect(ray, tEmissive);
 		const Vector3 bg  = (tEmissive < FLT_MAX) ? emissiveCol : getBg();
 		const Vector3 out = Vector3(vol.x, vol.y, vol.z) + bg * (1.0f - vol.w);
 		return Vector4(out.x, out.y, out.z, 1.0f);
 	}
 	case RenderingMode::VOLUMETRIC_VDB: {
-		return VdbVolumeRayMarching(ray);
+		return vdbVolumeRayMarching(ray);
 	}
 	case RenderingMode::COMBINED_SDF: {
-		const SurfaceHit surf  = TraceRayExtended(ray);
+		const SurfaceHit surf  = traceRayExtended(ray);
 		const float      tSurf = surf.hasHit ? surf.tHit : FLT_MAX;
-		const Vector4    vol   = VolumetricEffect(ray, tSurf);
+		const Vector4    vol   = volumetricEffect(ray, tSurf);
 		const Vector3    out   = Vector3(vol.x, vol.y, vol.z) + surf.color * (1.0f - vol.w);
 		return Vector4(out.x, out.y, out.z, 1.0f);
 	}
 	case RenderingMode::PATH_TRACING_EMBREE: {
 		// Accumulate ptSamplesPerPixel_ independent path samples and average.
-		// More samples Ôæå lower variance (converges as O(1/Ô³ÜN)).
+		// More samples ï¿½ï¿½ï¿½ lower variance (converges as O(1/Ô³ï¿½N)).
 		Vector3 accumulated(0.0f);
 		for (int s = 0; s < ptSamplesPerPixel_; ++s)
-			accumulated += TracePath(ray, ptMaxDepth_);
+			accumulated += tracePath(ray, ptMaxDepth_);
 		accumulated /= static_cast<float>(ptSamplesPerPixel_);
 		return Vector4(accumulated.x, accumulated.y, accumulated.z, 1.0f);
 	}
@@ -324,13 +324,13 @@ Vector4 RayTracer::RenderPixel(const RTCRay& ray) {
 		// The surface is first queried for its hit depth so the volume marcher
 		// clips correctly at the opaque boundary (same portal-Duff pattern as
 		// COMBINED_SDF, but surface radiance comes from full PT instead of Whitted).
-		const SurfaceHit surf  = TraceRayExtended(ray);
+		const SurfaceHit surf  = traceRayExtended(ray);
 		const float      tSurf = surf.hasHit ? surf.tHit : FLT_MAX;
-		const Vector4    vol   = VolumetricEffect(ray, tSurf);
+		const Vector4    vol   = volumetricEffect(ray, tSurf);
 		// Replace Whitted surface colour with Monte Carlo PT estimate
 		Vector3 ptSurf(0.0f);
 		for (int s = 0; s < ptSamplesPerPixel_; ++s)
-			ptSurf += TracePath(ray, ptMaxDepth_);
+			ptSurf += tracePath(ray, ptMaxDepth_);
 		ptSurf /= static_cast<float>(ptSamplesPerPixel_);
 		// Porter-Duff over: vol_rgb + pt_surface * T_volume
 		const Vector3 out = Vector3(vol.x, vol.y, vol.z) + ptSurf * (1.0f - vol.w);
@@ -338,12 +338,12 @@ Vector4 RayTracer::RenderPixel(const RTCRay& ray) {
 	}
 	case RenderingMode::COMBINED_PT_VDB: {
 		// Path-traced surface composited beneath a VDB smoke volume.
-		// VdbVolumeRayMarching(compositeBg=false) returns raw (rgb, opacity) so
+		// vdbVolumeRayMarching(compositeBg=false) returns raw (rgb, opacity) so
 		// we can Porter-Duff the PT surface into the transparent regions.
-		const Vector4 vdb = VdbVolumeRayMarching(ray, false);
+		const Vector4 vdb = vdbVolumeRayMarching(ray, false);
 		Vector3 ptSurf(0.0f);
 		for (int s = 0; s < ptSamplesPerPixel_; ++s)
-			ptSurf += TracePath(ray, ptMaxDepth_);
+			ptSurf += tracePath(ray, ptMaxDepth_);
 		ptSurf /= static_cast<float>(ptSamplesPerPixel_);
 		// Porter-Duff over: vdb in front, pt surface fills transparent regions
 		const Vector3 out = Vector3(vdb.x, vdb.y, vdb.z) + ptSurf * (1.0f - vdb.w);
@@ -396,12 +396,12 @@ void RayTracer::MoveCamera()
 	// Always advance scene time so lights orbit every frame,
 	// independent of whether the camera auto-rotation is enabled.
 	sceneTime_ += 1.0f / 60.0f;
-	UpdateScene(sceneTime_);
+	updateScene(sceneTime_);
 
 	// Resolve and cache the active rendering mode from the UI filter state.
 	// This runs on the main thread before the OMP pixel loop, so render threads
 	// see a stable currentRenderingMode_ for the entire frame.
-	currentRenderingMode_ = ResolveActiveMode();
+	currentRenderingMode_ = resolveActiveMode();
 
 	// Cache Global Sun state into frame-stable copies.
 	// UI variables (enableGlobalSun_, sunDirUI_, sunColor_, sunIntensity_) are
@@ -435,13 +435,13 @@ int RayTracer::Ui()
 	return uiController_->build();
 }
 
-void RayTracer::UpdateCameraPosition() {
-void RayTracer::UpdateCameraPosition() {
+void RayTracer::updateCameraPosition() {
+void RayTracer::updateCameraPosition() {
 	// Y-up spherical coordinates:
 	//   azimuth  = angle in XZ plane (horizontal orbit around Y axis)
 	//   elevation = angle from XZ plane toward +Y (vertical)
 	//   x = dist * cos(el) * cos(az)
-	//   y = dist * sin(el)              ÔæÉ Y is the vertical component
+	//   y = dist * sin(el)              ï¿½ï¿½ï¿½ Y is the vertical component
 	//   z = dist * cos(el) * sin(az)
 	float azimuthRad   = deg2rad(cameraAzimuth_);
 	float elevationRad = deg2rad(cameraElevation_);
@@ -464,7 +464,7 @@ void RayTracer::UpdateCameraPosition() {
 	cameraZ_ = newViewFrom.z;
 }
 
-void RayTracer::HandleLeftMouseDrag(const ImVec2& mouseDelta) {
+void RayTracer::handleLeftMouseDrag(const ImVec2& mouseDelta) {
 	// Left mouse: Orbital rotation around viewAt
 	const float rotationSpeed = 0.5f; // degrees per pixel
 
@@ -478,10 +478,10 @@ void RayTracer::HandleLeftMouseDrag(const ImVec2& mouseDelta) {
 	// Clamp elevation to prevent gimbal lock
 	cameraElevation_ = std::max(-maxElevation_, std::min(maxElevation_, cameraElevation_));
 
-	UpdateCameraPosition();
+	updateCameraPosition();
 }
 
-void RayTracer::HandleRightMouseDrag(const ImVec2& mouseDelta) {
+void RayTracer::handleRightMouseDrag(const ImVec2& mouseDelta) {
 	// Right mouse: Zoom in/out
 	// Up/Right = zoom in (decrease distance)
 	// Down/Left = zoom out (increase distance)
@@ -493,11 +493,11 @@ void RayTracer::HandleRightMouseDrag(const ImVec2& mouseDelta) {
 	// Clamp distance
 	cameraDistance_ = std::max(minCameraDistance_, std::min(maxCameraDistance_, cameraDistance_));
 
-	UpdateCameraPosition();
+	updateCameraPosition();
 }
 
-float RayTracer::GetCurrentFPS() const {
-	return SimpleGuiDX11::GetCurrentFPS();
+float RayTracer::getCurrentFPS() const {
+	return SimpleGuiDX11::getCurrentFPS();
 }
 //=============================================================================
 
@@ -513,30 +513,30 @@ float RayTracer::GetCurrentFPS() const {
 // PATH TRACING: STATICKE POMOCNE METODY (deleguji na PathTracer)
 //=============================================================================
 
-float RayTracer::EvaluateHenyeyGreenstein(const float cosTheta, const float g) {
+float RayTracer::evaluateHenyeyGreenstein(const float cosTheta, const float g) {
 	return PathTracer::evaluateHenyeyGreenstein(cosTheta, g);
 }
 
-float RayTracer::BalancedHeuristic(const float p_a, const float p_b) {
+float RayTracer::balancedHeuristic(const float p_a, const float p_b) {
 	return PathTracer::balancedHeuristic(p_a, p_b);
 }
 
-void RayTracer::BuildONB(const Vector3& n, Vector3& t, Vector3& b) {
+void RayTracer::buildONB(const Vector3& n, Vector3& t, Vector3& b) {
 	PathTracer::buildONB(n, t, b);
 }
 
-Vector3 RayTracer::SampleHemisphereCosine(const Vector3& normal) {
+Vector3 RayTracer::sampleHemisphereCosine(const Vector3& normal) {
 	return PathTracer::sampleHemisphereCosine(normal);
 }
 
-Vector3 RayTracer::SampleDirectLightPT(const Vector3& hitPoint,
+Vector3 RayTracer::sampleDirectLightPT(const Vector3& hitPoint,
 	const Vector3& normal, const Vector3& albedo) const
 {
 	if (!pathTracer_) return Vector3(0.0f);
 	return pathTracer_->sampleDirectLight(hitPoint, normal, albedo, buildPathTracingContext());
 }
 
-Vector3 RayTracer::TracePath(const RTCRay& initialRay, const int maxDepth) const {
+Vector3 RayTracer::tracePath(const RTCRay& initialRay, const int maxDepth) const {
 	if (!pathTracer_) return Vector3(0.0f);
 	return pathTracer_->tracePath(initialRay, maxDepth, buildPathTracingContext());
 }
@@ -557,7 +557,7 @@ PathTracingContext RayTracer::buildPathTracingContext() const {
 		frameSunDir_,
 		frameSunColor_,
 		frameSunIntensity_,
-		[this](const Vector3& p, const Vector3& l) { return IsHitPointVisible(p, l); }
+		[this](const Vector3& p, const Vector3& l) { return isHitPointVisible(p, l); }
 	};
 	return ctx;
 }
@@ -566,9 +566,9 @@ PathTracingContext RayTracer::buildPathTracingContext() const {
 //=============================================================================
 
 /// Traces a primary ray through the Embree scene and returns both the shaded
-/// colour and the hit distance t, enabling VolumetricEffect to stop marching
+/// colour and the hit distance t, enabling volumetricEffect to stop marching
 /// at the opaque surface boundary.
-SurfaceHit RayTracer::TraceRayExtended(const RTCRay& ray,
+SurfaceHit RayTracer::traceRayExtended(const RTCRay& ray,
 	const float n_1, const int depth, const int maxDepth)
 {
 	auto bgColor = [&]() -> Vector3 {
@@ -623,10 +623,10 @@ SurfaceHit RayTracer::TraceRayExtended(const RTCRay& ray,
 
 	Vector3 color;
 	switch (mat->GetShader()) {
-	case 1:  color = NormalShader(n); break;
-	case 2:  color = LambertShader(*mat, uv, hitPt, n); break;
-	case 4:  color = TransparentShader(ray, hitPt, n, dir, *mat, n_1, depth); break;
-	default: color = PhongShader(*mat, uv, hitPt, n, dir, depth); break;
+	case 1:  color = normalShader(n); break;
+	case 2:  color = lambertShader(*mat, uv, hitPt, n); break;
+	case 4:  color = transparentShader(ray, hitPt, n, dir, *mat, n_1, depth); break;
+	default: color = phongShader(*mat, uv, hitPt, n, dir, depth); break;
 	}
 	return { color, tHit, true };
 }

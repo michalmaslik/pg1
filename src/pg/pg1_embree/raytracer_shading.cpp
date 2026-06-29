@@ -6,12 +6,12 @@
 // SURFACE SHADING MODELS (for Embree-traced geometry)
 //=============================================================================
 
-Vector3 RayTracer::NormalShader(const Vector3& normalVector) {
+Vector3 RayTracer::normalShader(const Vector3& normalVector) {
 	// Visualize normal as RGB color (map from [-1,1] to [0,1])
 	return (normalVector + Vector3(1.0f, 1.0f, 1.0f)) * 0.5f;
 }
 
-Vector3 RayTracer::LambertShader(const Material& material, const Coord2f& texCoord,
+Vector3 RayTracer::lambertShader(const Material& material, const Coord2f& texCoord,
 	const Vector3& hitPoint, const Vector3& normalVector) {
 
 	Vector3 outputColor;
@@ -32,7 +32,7 @@ Vector3 RayTracer::LambertShader(const Material& material, const Coord2f& texCoo
 	outputColor += material.GetAmbient();
 
 	// Diffuse lighting with shadow test
-	if (IsHitPointVisible(hitPoint, omniLightPosition)) {
+	if (isHitPointVisible(hitPoint, omniLightPosition)) {
 		// Lambert's Law: I_diffuse = I_light * albedo * max(0, NÂ·L)
 		outputColor += diffuseColor * clamp(normalVector.DotProduct(l));
 	}
@@ -40,7 +40,7 @@ Vector3 RayTracer::LambertShader(const Material& material, const Coord2f& texCoo
 	return outputColor;
 }
 
-Vector3 RayTracer::PhongShader(const Material& material, const Coord2f& texCoord,
+Vector3 RayTracer::phongShader(const Material& material, const Coord2f& texCoord,
 	const Vector3& hitPoint, const Vector3& normalVector, const Vector3& directionVector, const int depth) {
 
 	Vector3 outputColor;
@@ -69,7 +69,7 @@ Vector3 RayTracer::PhongShader(const Material& material, const Coord2f& texCoord
 	outputColor += material.GetAmbient();
 
 	// Diffuse and specular lighting with shadow test
-	if (IsHitPointVisible(hitPoint, omniLightPosition)) {
+	if (isHitPointVisible(hitPoint, omniLightPosition)) {
 		// Diffuse lighting (Lambert)
 		outputColor += diffuseColor * clamp(normalVector.DotProduct(l));
 
@@ -79,7 +79,7 @@ Vector3 RayTracer::PhongShader(const Material& material, const Coord2f& texCoord
 
 		// Trace secondary ray for indirect specular contribution
 		RTCRay secondaryRay = makeSecondaryRay(hitPoint, l);
-		Vector3 l_i = TraceRay(secondaryRay, depth + 1.0f);
+		Vector3 l_i = traceRay(secondaryRay, depth + 1.0f);
 
 		// Phong specular: I_spec = I_light * k_s * max(0, RÂ·V)^shininess
 		outputColor += specularColor * powf(clamp(l_r.DotProduct(-directionVector)), material.GetShininess());
@@ -93,7 +93,7 @@ Vector3 RayTracer::PhongShader(const Material& material, const Coord2f& texCoord
 		if (nDotSun > 0.0f) {
 			// Shadow: push a virtual point far along the sun direction.
 			const Vector3 sunPt = hitPoint + frameSunDir_ * maxDistance_;
-			if (IsHitPointVisible(hitPoint, sunPt)) {
+			if (isHitPointVisible(hitPoint, sunPt)) {
 				const Vector3 Li = frameSunColor_ * frameSunIntensity_;
 				// Diffuse
 				outputColor += diffuseColor * nDotSun * Li;
@@ -118,7 +118,7 @@ Vector3 t_b_l(const float length, const Vector3 attenuation) {
 	return a;
 }
 
-Vector3 RayTracer::TransparentShader(const RTCRay& ray, const Vector3& hitPoint, const Vector3& normalVector,
+Vector3 RayTracer::transparentShader(const RTCRay& ray, const Vector3& hitPoint, const Vector3& normalVector,
 	const Vector3& directionVector, const Material& material, const float n_1, const int depth) {
 
 	float n_2 = material.GetIor();
@@ -164,10 +164,10 @@ Vector3 RayTracer::TransparentShader(const RTCRay& ray, const Vector3& hitPoint,
 	}
 
 	// Trace rays
-	Vector3 refl = TraceRay(makeSecondaryRay(hitPoint, reflectedRayDirection), n_1, depth + 1);
+	Vector3 refl = traceRay(makeSecondaryRay(hitPoint, reflectedRayDirection), n_1, depth + 1);
 	Vector3 refr = Vector3(0.0f);
 	if (!totalInternalReflection) {
-		refr = TraceRay(makeSecondaryRay(hitPoint, refractedRayDirection), n_2, depth + 1);
+		refr = traceRay(makeSecondaryRay(hitPoint, refractedRayDirection), n_2, depth + 1);
 		// Fallback na cubemap ak refr je Ăşplne ÄŤierna a backgroundEnabled_
 		if (refr == Vector3(0.0f) && backgroundEnabled_ && cubemap_ != nullptr) {
 			Color3f bg = cubemap_->GetTexel(refractedRayDirection);
@@ -186,7 +186,7 @@ Vector3 RayTracer::TransparentShader(const RTCRay& ray, const Vector3& hitPoint,
 // VOLUMETRIC RENDERING DISPATCH
 //=============================================================================
 
-Vector4 RayTracer::VolumetricRender(const RTCRay& ray) {
+Vector4 RayTracer::volumetricRender(const RTCRay& ray) {
 	// Dispatcher: vybere mezi volumetrickym krochovanim a sphere-tracingem
 	if (!sdfRenderer_) return Vector4(0.0f);
 	return sdfRenderer_->render(ray, buildSdfContext(), rayMarching_);
@@ -198,7 +198,7 @@ Vector4 RayTracer::VolumetricRender(const RTCRay& ray) {
 
 /// Front-to-back volumetricke krochlovani skrze SDF oblak.
 /// @param tMax  Orizi krochlovani na tuto vzdalenost (pouziva se v COMBINED_SDF modu).
-Vector4 RayTracer::VolumetricEffect(const RTCRay& ray, const float tMax)
+Vector4 RayTracer::volumetricEffect(const RTCRay& ray, const float tMax)
 {
 	if (!sdfRenderer_) return Vector4(0.0f);
 	return sdfRenderer_->volumetricEffect(ray, buildSdfContext(), tMax);
@@ -208,7 +208,7 @@ Vector4 RayTracer::VolumetricEffect(const RTCRay& ray, const float tMax)
 // SPHERE-TRACING (deleguje na SdfRenderer)
 //=============================================================================
 
-Vector4 RayTracer::SurfaceEffect(const RTCRay& ray)
+Vector4 RayTracer::surfaceEffect(const RTCRay& ray)
 {
 	if (!sdfRenderer_) return Vector4(0.0f);
 	return sdfRenderer_->surfaceEffect(ray, buildSdfContext());
@@ -217,7 +217,7 @@ Vector4 RayTracer::SurfaceEffect(const RTCRay& ray)
 // MAIN RAY TRACING ENGINE (Embree-based surface ray tracing)
 //=============================================================================
 
-Vector3 RayTracer::TraceRay(const RTCRay& ray, const float n_1, const int depth, const int maxDepth) {
+Vector3 RayTracer::traceRay(const RTCRay& ray, const float n_1, const int depth, const int maxDepth) {
 	// Prevent infinite recursion
 	if (depth >= maxDepth) {
 		return Vector3(0.0f);
@@ -299,15 +299,15 @@ Vector3 RayTracer::TraceRay(const RTCRay& ray, const float n_1, const int depth,
 	// Apply appropriate shader based on material type
 	switch (material->GetShader()) {
 	case 1:
-		return NormalShader(normalVector);
+		return normalShader(normalVector);
 	case 2:
-		return LambertShader(*material, texCoord, hitPoint, normalVector);
+		return lambertShader(*material, texCoord, hitPoint, normalVector);
 	case 3:
-		return PhongShader(*material, texCoord, hitPoint, normalVector, directionVector, depth);
+		return phongShader(*material, texCoord, hitPoint, normalVector, directionVector, depth);
 	case 4:
-		return TransparentShader(ray, hitPoint, normalVector, directionVector, *material, n_1, depth);
+		return transparentShader(ray, hitPoint, normalVector, directionVector, *material, n_1, depth);
 	default:
-		return PhongShader(*material, texCoord, hitPoint, normalVector, directionVector, depth);
+		return phongShader(*material, texCoord, hitPoint, normalVector, directionVector, depth);
 	}
 }
 

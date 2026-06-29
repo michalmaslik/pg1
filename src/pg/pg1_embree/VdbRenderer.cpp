@@ -1,4 +1,4 @@
-#include "stdafx.h"
+ï»¿#include "stdafx.h"
 #include "VdbRenderer.h"
 #include <iostream>
 
@@ -73,8 +73,8 @@ void VdbRenderer::cleanup()
 
 void VdbRenderer::clearVolume()
 {
-    // Uvolni pouze sampler a svazek — zarizeni zachovej pro dalsi nacitani.
-    // Tato metoda je pouzivana z ClearScene() pro hot-swap sceny bez nutnosti
+    // Uvolni pouze sampler a svazek ï¿½ zarizeni zachovej pro dalsi nacitani.
+    // Tato metoda je pouzivana z clearScene() pro hot-swap sceny bez nutnosti
     // znovu inicializovat OpenVKL zarizeni (coz je drahe).
     if (vklSampler_) {
         vklRelease(vklSampler_);

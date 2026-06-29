@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "stdafx.h"
 #include "ShadingUtils.h"
@@ -17,7 +17,7 @@
  *
  * SdfRenderer je bezstavova vypocetni trida — nevlastni zadna data,
  * vsechny potrebne informace dostava pres SdfRenderContext pri kazdem volani.
- * RayTracer ji volá z metod VolumetricEffect, SurfaceEffect a VolumetricRender.
+ * RayTracer ji volá z metod volumetricEffect, surfaceEffect a volumetricRender.
  *
  * Zavislost na Embree (pro viditelnost ve sphere-tracingu) je abstrahovana pres
  * std::function<bool(Vector3, Vector3)> v kontextu, cimz se zamezi priame
@@ -77,7 +77,7 @@ public:
     // RENDEROVACI METODY
     // =========================================================================
 
-    /// @brief Dispatcher: vybere mezi VolumetricEffect a SurfaceEffect dle ctx.rayMarching.
+    /// @brief Dispatcher: vybere mezi volumetricEffect a surfaceEffect dle ctx.rayMarching.
     /// @param ray        Primerni paprsek z kamery.
     /// @param ctx        Kontext renderovani pro tento snimek.
     /// @param rayMarching  true = volumetricke krochlovani; false = sphere-tracing.

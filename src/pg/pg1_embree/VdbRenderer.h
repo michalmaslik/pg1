@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "stdafx.h"
 #include "ShadingUtils.h"
@@ -84,7 +84,7 @@ public:
     // =========================================================================
 
     /// @brief Uvolni pouze svazek a sampler, zarizeni zachova (pro hot-swap sceny).
-    /// Pouziva se v ClearScene() kde je nutne zachovat device mezi nacitanimi scen.
+    /// Pouziva se v clearScene() kde je nutne zachovat device mezi nacitanimi scen.
     void clearVolume();
 
     /// @brief Nacte VDB soubor a pripravi OpenVKL sampler.

@@ -8,8 +8,16 @@
 /*! \file noise.h
 \brief Provides noise generation functions and a Noise class for procedural effects.
 
-This file includes implementations of Perlin noise, fractal Brownian motion (FBM), and a general-purpose
-`Noise` class for generating procedural noise based on different types.
+This file includes implementations of hash-based 3D value noise, fractal Brownian motion (FBM),
+and a general-purpose `Noise` class for generating procedural noise based on different types.
+
+Terminology note:
+  The standalone `noise()` function implements a **hash-based 3D value noise**: scalar hash values
+  are placed at integer lattice points and trilinearly interpolated using quintic smoothstep weights
+  (the same construction used in Inigo Quilez's Rainforest ShaderToy). This is visually equivalent
+  to classic Perlin noise and is referred to as `NoiseType::Perlin` throughout the engine for
+  historical/legacy reasons.  True gradient Perlin noise (which uses random gradient vectors at
+  lattice points rather than scalar hashes) is not currently required and has not been implemented.
 
 */
 
@@ -29,7 +37,11 @@ inline float hash1(float n) {
     return fract(n * 17.0f * fract(n * 0.3183099f));
 }
 
-// Computes Perlin-like noise for a 3D point
+// Computes hash-based 3D value noise for a given point.
+// Scalar pseudo-random values are placed at integer lattice corners via hash1() and
+// trilinearly interpolated using quintic smoothstep weights (6t^5 - 15t^4 + 10t^3).
+// Output range: [-1, 1].
+// Source: Inigo Quilez's Rainforest ShaderToy (https://www.shadertoy.com/view/4ttSWf)
 inline float noise(const Vector3& x) {
     Vector3 p = Vector3(std::floor(x.x), std::floor(x.y), std::floor(x.z)); // Integer part
     Vector3 w = Vector3(x.x - p.x, x.y - p.y, x.z - p.z); // Fractional part
@@ -99,9 +111,9 @@ public:
     \brief Specifies the type of noise to generate.
     */
     enum class NoiseType {
-        None,                   /*!< No noise */
-        Perlin,                 /*!< Perlin noise */
-        FractalBrownianMotion   /*!< Fractal Brownian Motion (FBM) */
+        None,                   /*!< No noise applied */
+        Perlin,                 /*!< Hash-based 3D value noise (delegates to standalone noise()) */
+        FractalBrownianMotion   /*!< Fractal Brownian Motion — 4 octaves of value noise (fbm_4()) */
     };
 
     // Constructor: Initializes the noise generator with a type, scale, and strength
@@ -138,10 +150,14 @@ private:
     float scale_;     // Scale factor for the input point
     float strength_;  // Strength of the noise
 
-    // Computes Perlin noise for a given point
+    // Computes hash-based 3D value noise for a given point.
+    // Delegates to the standalone noise() function, which places scalar hash values at
+    // integer lattice corners and interpolates them with quintic smoothstep weights.
+    // The 'point' argument has already been multiplied by scale_ in Generate(), and
+    // the result will be multiplied by strength_ there — no further scaling is applied here.
+    // Output range: [-1, 1].
     [[nodiscard]] float PerlinNoise(const Vector3& point) const {
-        // Simple procedural noise - could be improved with real Perlin noise
-        return sin(point.x) * cos(point.y) * sin(point.z);
+        return noise(point);
     }
 
     // Computes fractal Brownian motion (FBM) for a given point

@@ -7,7 +7,7 @@
 // INTEL EMBREE INITIALIZATION (Surface Ray Tracing)
 //=============================================================================
 
-int RayTracer::InitDeviceAndScene(const char* config)
+int RayTracer::initDeviceAndScene(const char* config)
 {
 	std::cout << "[RAY TRACER] Initializing Embree device..." << std::endl;
 
@@ -37,7 +37,7 @@ int RayTracer::InitDeviceAndScene(const char* config)
 	return S_OK;
 }
 
-int RayTracer::ReleaseDeviceAndScene()
+int RayTracer::releaseDeviceAndScene()
 {
 	rtcReleaseScene(scene_);
 	rtcReleaseDevice(device_);
@@ -48,7 +48,7 @@ int RayTracer::ReleaseDeviceAndScene()
 // SURFACE GEOMETRY LOADING (Triangle Meshes for Embree)
 //=============================================================================
 
-void RayTracer::LoadModel(const std::string& fileName, const Transform& transform)
+void RayTracer::loadModel(const std::string& fileName, const Transform& transform)
 {
 	// LoadOBJ expects raw-pointer vectors (its interface is unchanged).
 	// We use temporary raw vectors and transfer ownership into unique_ptr
@@ -148,7 +148,7 @@ void RayTracer::LoadModel(const std::string& fileName, const Transform& transfor
 		materials_.push_back(std::unique_ptr<Material>(m));
 }
 
-void RayTracer::LoadScene(
+void RayTracer::loadScene(
 	const std::vector<ModelInfo>& models,
 	const std::vector<Shape*>& shapes,
 	const char* cubeMapFileNames[6])
@@ -159,7 +159,7 @@ void RayTracer::LoadScene(
 	// Load all polygonal models (for surface ray tracing with Embree)
 	for (const auto& model : models)
 	{
-		LoadModel(model.filePath, model.transform);
+		loadModel(model.filePath, model.transform);
 	}
 
 	// Add procedural volumetric shapes (for SDF ray marching)
@@ -178,7 +178,7 @@ void RayTracer::LoadScene(
 
 // makeSecondaryRay -> presunuto do ShadingUtils.cpp
 
-bool RayTracer::IsHitPointVisible(const Vector3& hitPoint, const Vector3& lightPoint) const {
+bool RayTracer::isHitPointVisible(const Vector3& hitPoint, const Vector3& lightPoint) const {
 	// If no surface geometry is loaded, assume point is always visible
 	if (surfaces_.empty()) {
 		return true;
@@ -231,7 +231,7 @@ bool RayTracer::IsHitPointVisible(const Vector3& hitPoint, const Vector3& lightP
 
 //===========================================================================
 
-void RayTracer::InitializeFixedSdfScene() {
+void RayTracer::initializeFixedSdfScene() {
 	// Three smooth-unioned spheres matching the reference ShaderToy SDF at t=0:
 	//   sdSphere(p, (-8, 2,-1), 5.6)  -- dense core
 	//   sdSphere(p, ( 8, 8, 3), 5.6)  -- upper-right lobe
@@ -254,7 +254,7 @@ void RayTracer::InitializeFixedSdfScene() {
 	std::cout << "[RAY TRACER] Fixed SDF scene initialized (3-sphere cloud)" << std::endl;
 }
 
-bool RayTracer::LoadObjModel(const std::string& fileName, EntityAnimState* animOut) {
+bool RayTracer::loadObjModel(const std::string& fileName, EntityAnimState* animOut) {
 	std::cout << "[RAY TRACER] Loading OBJ model: " << fileName << std::endl;
 
 	// Exclusive lock: blocks until every in-flight GetPixel() call releases its
@@ -262,7 +262,7 @@ bool RayTracer::LoadObjModel(const std::string& fileName, EntityAnimState* animO
 	std::unique_lock<std::shared_mutex> reloadLock(sceneMutex_);
 
 	// Clear existing surface models first
-	ClearSurfaceModels();
+	clearSurfaceModels();
 
 	// Load new OBJ file
 	std::vector<Surface*> newSurfaces;
@@ -275,7 +275,7 @@ bool RayTracer::LoadObjModel(const std::string& fileName, EntityAnimState* animO
 		return false;
 	}
 
-	// ClearSurfaceModels() above already released the old scene and created a
+	// clearSurfaceModels() above already released the old scene and created a
 	// fresh empty one.  Re-using that scene avoids a window where scene_ is a
 	// dangling pointer between a second release and the next rtcNewScene call.
 
@@ -354,7 +354,7 @@ bool RayTracer::LoadObjModel(const std::string& fileName, EntityAnimState* animO
 			triangles[i].v2 = k - 1;
 		}
 
-		// Copy initial positions into baseVerts so UpdateEntityTransforms can
+		// Copy initial positions into baseVerts so updateEntityTransforms can
 		// reconstruct the correct world positions each frame from scratch.
 		if (needsAnim) {
 			pg.baseVerts = pg.animVerts;  // snapshot of t=0 positions
@@ -398,7 +398,7 @@ bool RayTracer::LoadObjModel(const std::string& fileName, EntityAnimState* animO
 	return true;
 }
 
-void RayTracer::ClearSurfaceModels() {
+void RayTracer::clearSurfaceModels() {
 	// Release the Embree scene FIRST: it holds raw Material* via rtcSetGeometryUserData.
 	// Clearing the unique_ptr vectors before releasing the scene would create dangling
 	// pointers inside Embree's geometry user-data slots.
@@ -424,7 +424,7 @@ void RayTracer::ClearSurfaceModels() {
 	std::cout << "[RAY TRACER] Surface models cleared" << std::endl;
 }
 
-void RayTracer::ClearScene()
+void RayTracer::clearScene()
 {
 	// Acquire an exclusive lock.  This BLOCKS until every GetPixel() call that
 	// currently holds a shared_lock has returned, guaranteeing no thread is
@@ -474,7 +474,7 @@ void RayTracer::ClearScene()
 	sdfAnimOffset_ = Vector3(0.0f, 0.0f, 0.0f);
 	vdbAnimOffset_ = Vector3(0.0f, 0.0f, 0.0f);
 
-	std::cout << "[ClearScene] All scene assets torn down safely.\n";
+	std::cout << "[clearScene] All scene assets torn down safely.\n";
 }
 
 //=============================================================================

@@ -53,7 +53,7 @@ private:
 
     Vector3 viewFrom_; // Camera position (eye or origin)
     Vector3 viewAt_; // Target point the camera is looking at
-    Vector3 up_{ Vector3(0.0f, 0.0f, 1.0f) }; // Up vector for orientation
+    Vector3 up_{ Vector3(0.0f, 1.0f, 0.0f) }; // Up vector for orientation (Y-up world space)
 
     float f_y_{ 1.0f }; // Focal length in pixels
 
