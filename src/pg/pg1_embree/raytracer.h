@@ -16,8 +16,12 @@
 #include "vector4.h"
 #include <openvkl/openvkl.h>
 #include "vdb_loader.h"
+#include "SceneLoader.h"
 #include <memory>
 #include <shared_mutex>
+#include <atomic>
+#include <chrono>
+#include "RenderTypes.h"
 
 
 /*! \class RayTracer
@@ -74,6 +78,40 @@ struct Transform {
 struct ModelInfo {
 	std::string filePath; // Path to the OBJ model file
 	Transform transform;  // Transformation to apply to the model
+};
+
+/// Per-entity animation state, populated by LoadSceneFromDescription when a .scn
+/// entity line carries an ORBIT or HOVER animation block.
+///
+/// MESH entities: Embree vertex buffers are shared with application memory so the
+/// positions can be rewritten each frame from the stored base vertex copies.
+///
+/// SDF/VDB entities: no geometry buffers — the ray-march code applies the computed
+/// translation offset (sdfAnimOffset_ / vdbAnimOffset_) to incoming rays each frame.
+struct EntityAnimState {
+	std::string entityKind;  ///< "MESH", "SDF", or "VDB"
+	std::string animType;    ///< "ORBIT", "HOVER", "PINGPONG", "TOWARDS", or "" (static)
+	float animSpeed{0.0f};   ///< Angular velocity (ORBIT/HOVER) or lerp rate (PINGPONG/TOWARDS)
+	float animParam1{0.0f};  ///< Orbit radius (ORBIT) or hover amplitude (HOVER)
+	float baseX{0.0f};       ///< Base world X (origin for OBJ meshes loaded without a transform)
+	float baseY{0.0f};       ///< Base world Y
+	float baseZ{0.0f};       ///< Base world Z
+	/// World-space position used by PINGPONG and TOWARDS.
+	/// For PINGPONG : entity oscillates between (baseX,baseY,baseZ) and this point.
+	/// For TOWARDS  : entity STARTS at this world-space position and arrives at
+	///                (baseX, baseY, baseZ) as time advances (t clamped at 1).
+	///                i.e. offset(t) = (1-t) * (target - base).
+	float targetX{0.0f};
+	float targetY{0.0f};
+	float targetZ{0.0f};
+
+	/// Per-Embree-geometry data — one entry per Surface inside the loaded OBJ.
+	struct PerGeom {
+		unsigned int geomID{RTC_INVALID_GEOMETRY_ID};
+		std::vector<Vertex3f> baseVerts;  ///< Original positions; never mutated after loading
+		std::vector<Vertex3f> animVerts;  ///< Shared with Embree; rewritten every frame
+	};
+	std::vector<PerGeom> geoms;  ///< Populated only when entityKind == "MESH"
 };
 
 // Main ray tracer class, inheriting from SimpleGuiDX11 for GUI and rendering support
@@ -140,6 +178,14 @@ public:
 	// Used by COMBINED_SDF mode so the volume marcher can stop at the surface boundary.
 	SurfaceHit TraceRayExtended(const RTCRay& ray, const float n_1 = 1.0f, const int depth = 0, const int maxDepth = 10);
 
+	// -----------------------------------------------------------------------
+	// PATH TRACING PIPELINE  (does not touch Whitted TraceRay / shader functions)
+	// -----------------------------------------------------------------------
+
+	/// Iterative Monte Carlo path tracer.  Accumulates one path sample.
+	/// Call ptSamplesPerPixel_ times and average for a converged estimate.
+	[[nodiscard]] Vector3 TracePath(const RTCRay& ray, int maxDepth) const;
+
 	//=============================================================================
 	// SURFACE SHADING MODELS (for Embree-traced triangle meshes)
 	//=============================================================================
@@ -186,7 +232,7 @@ public:
 	void CleanupOpenVKL();
 
 	//! VDB Volume ray marching implementation
-	Vector4 VdbVolumeRayMarching(const RTCRay& ray);
+	Vector4 VdbVolumeRayMarching(const RTCRay& ray, bool compositeBg = true);
 
 	//! Check if VDB volume is loaded
 	bool HasVdbVolume() const { return vklVolume_ != VKLVolume{}; }
@@ -197,15 +243,6 @@ public:
 	//! Get current FPS
 	float GetCurrentFPS() const;
 
-// RENDERING MODE MANAGEMENT
-//=============================================================================
-
-	enum class RenderingMode {
-		SURFACE_EMBREE,     // Traditional triangle mesh rendering with Embree
-		VOLUMETRIC_SDF,     // SDF-based volumetric shapes
-		VOLUMETRIC_VDB,     // VDB volumes with OpenVKL
-		COMBINED_SDF        // Deep composite: SDF volume in front of Embree surface
-	};
 
 	void SetRenderingMode(RenderingMode mode) { currentRenderingMode_ = mode; }
 	RenderingMode GetRenderingMode() const { return currentRenderingMode_; }
@@ -214,11 +251,6 @@ public:
 // SCENE MANAGEMENT
 //=============================================================================
 
-	enum class SceneType {
-		SCENE_SHADERTOY_SDF,  // ShaderToy-style SDF volumetric scene with 3 animated coloured lights
-		SCENE_CUSTOM_OBJ,     // Arbitrary OBJ file loaded at runtime, rendered with Embree
-		SCENE_CUSTOM_VDB      // Arbitrary VDB file loaded at runtime, rendered with OpenVKL
-	};
 
 	// Load a predefined scene configuration
 	void LoadPredefinedScene(SceneType type);
@@ -233,8 +265,10 @@ public:
 // DYNAMIC MODEL LOADING
 //=============================================================================
 
-// Load OBJ model dynamically during runtime
-	bool LoadObjModel(const std::string& fileName);
+// Load OBJ model dynamically during runtime.
+	// If animOut is non-null the geometry uses shared vertex buffers so the
+	// positions can be updated each frame; state is written into *animOut.
+	bool LoadObjModel(const std::string& fileName, EntityAnimState* animOut = nullptr);
 
 	// Clear all loaded surface models
 	void ClearSurfaceModels();
@@ -270,6 +304,12 @@ private:
 
 	/// Owned materials; raw Material* stored in Embree geometry user-data via .get().
 	std::vector<std::unique_ptr<Material>> materials_;
+
+	/// Uniquely-owned texture objects loaded from OBJ material files.
+	/// Multiple Material slots may share the same Texture* (TextureProxy caches);
+	/// storing them here allows a single safe delete rather than per-material
+	/// deletion that would cause double-free crashes.
+	std::vector<Texture*> ownedTextures_;
 
 	/// Non-owning observer pointers to volumetric SDF shapes.
 	/// Actual ownership lives in fixedSdfScene_ (or future per-scene owners).
@@ -322,6 +362,11 @@ private:
 	float   volumetricAlbedo_[3]{ 0.8f, 0.8f, 0.8f }; ///< Albedo for ImGui colour picker
 	Vector3 volumetricAlbedoVec_{ 0.8f, 0.8f, 0.8f }; ///< Albedo as Vector3
 
+	// --- Path tracing ---
+	int   ptMaxDepth_{ 8 };        ///< Max path length before hard termination
+	int   ptSamplesPerPixel_{ 4 }; ///< Samples accumulated per RenderPixel call
+	int   ptRRMinDepth_{ 3 };      ///< Bounce depth at which Russian Roulette begins
+
 	// --- Whitted surface tracing ---
 	int   maxRecursionDepth_{ 5 };            ///< Max recursion depth for reflections/refractions
 	float shadowBias_{ 0.001f };              ///< Ray-origin offset to prevent self-shadowing
@@ -371,9 +416,42 @@ private:
 	// SCENE MANAGEMENT STATE
 	// =========================================================================
 
-	RenderingMode currentRenderingMode_{ RenderingMode::SURFACE_EMBREE };
-	SceneType     currentScene_{ SceneType::SCENE_SHADERTOY_SDF };
-	float         sceneTime_{ 0.0f }; ///< Accumulated animation time (seconds)
+	RenderingMode      currentRenderingMode_{ RenderingMode::SURFACE_EMBREE };
+	SceneType          currentScene_{ SceneType::SCENE_SHADERTOY_SDF };
+	float              sceneTime_{ 0.0f }; ///< Accumulated animation time (seconds)
+
+	/// High-level render filter — set by the UI, consumed by ResolveActiveMode().
+	/// Cached into currentRenderingMode_ once per frame in MoveCamera().
+	GlobalRenderFilter currentFilter_{ GlobalRenderFilter::COMBINED };
+
+	/// If true, ResolveActiveMode() selects a path-tracing pipeline for the mesh.
+	bool objUsePathTracing_{ false };
+
+	// =========================================================================
+	// GLOBAL SUN — UI-controlled state (main thread only)
+	// =========================================================================
+
+	/// Toggle in the "Environment" UI panel.
+	bool    enableGlobalSun_{ false };
+
+	/// Raw (possibly un-normalised) direction toward the sun, from surface to light.
+	/// Stored as float[3] for direct use with ImGui::SliderFloat3.
+	float   sunDirUI_[3]{ 0.5f, 1.0f, 0.5f };
+
+	/// Colour tint of the sun.
+	Vector3 sunColor_{ 1.0f, 0.9f, 0.8f };
+
+	/// Scalar intensity multiplier (no 1/d² attenuation — directional light).
+	float   sunIntensity_{ 5.0f };
+
+	// -------------------------------------------------------------------------
+	// Frame-stable copies set in MoveCamera() BEFORE the OMP pixel dispatch.
+	// Render threads read ONLY these; the UI vars above are main-thread-only.
+	// -------------------------------------------------------------------------
+	bool    frameSunEnabled_{ false };
+	Vector3 frameSunDir_{ 0.0f };      ///< Normalised, pointing TOWARD the sun
+	Vector3 frameSunColor_{ 0.0f };
+	float   frameSunIntensity_{ 0.0f };
 
 	// =========================================================================
 	// UI VISIBILITY FLAGS
@@ -388,9 +466,56 @@ private:
 	bool singleFrameRender_{ false };
 	bool autoRotateCamera_{ false };
 
-	// VDB file path buffers for ImGui text inputs
+	// VDB file path buffers for ImGui text inputs (legacy path, kept for internal use)
 	char vdbFilePath_[512]{ "C:\\Users\\micha\\Desktop\\file.vdb" };
 	char vdbGridName_[64]{ "density" };
+
+	// =========================================================================
+	// SCENE CONFIGURATION LOADER  (.scn file)
+	// =========================================================================
+
+	std::vector<SceneDescription> scnScenes_;  ///< Scenes parsed from scenes.scn
+	int selectedSceneIdx_{ 0 };                ///< Currently highlighted scene in SETUP combo
+
+	/// LightDesc list for the active scene (set by LoadSceneFromDescription,
+	/// cleared by LoadPredefinedScene).  Non-empty = use data-driven ORBIT
+	/// animation in UpdateScene instead of the legacy hardcoded path.
+	std::vector<LightDesc> activeLightDescs_;
+
+	/// Per-entity animation state populated by LoadSceneFromDescription.
+	/// Cleared by ClearScene() before each new scene load.
+	std::vector<EntityAnimState> activeEntityAnims_;
+
+	// =========================================================================
+	// RENDER PROGRESS TRACKING
+	// =========================================================================
+
+	/// Number of fully rendered rows in the current frame.
+	/// Incremented once per row from within OMP render threads.
+	std::atomic<int> completedRows_{0};
+
+	/// Total rows in the current frame (set to height() before each frame).
+	int totalRows_{1};
+
+	/// Wall-clock time when the current frame's render loop began.
+	std::chrono::time_point<std::chrono::high_resolution_clock> renderStartTime_;
+
+	/// True while the OMP pixel loop is executing for the current frame.
+	std::atomic<bool> isRendering_{false};
+
+	/// Duration (seconds) of the most recently completed frame.
+	/// Written by the last OMP thread to finish, read by the UI thread.
+	float lastFrameDuration_{0.0f};
+
+	/// Exponential-moving-average of the raw ETA, updated each UI frame.
+	/// Seeded to -1 so the first valid sample initialises it directly (no warm-up lag).
+	float smoothedEta_{-1.0f};
+
+	/// Translation offsets applied each frame by UpdateEntityTransforms().
+	/// Ray-march code subtracts these offsets from sample positions to simulate
+	/// the SDF/VDB volume being displaced from the world origin.
+	Vector3 sdfAnimOffset_{0.0f, 0.0f, 0.0f};
+	Vector3 vdbAnimOffset_{0.0f, 0.0f, 0.0f};
 
 	// =========================================================================
 	// PRIVATE HELPER METHODS
@@ -398,8 +523,37 @@ private:
 
 	void InitializeFixedSdfScene();
 	void UpdateCameraPosition();
+
+	/// Recomputes and uploads animated entity transforms for the current frame.
+	/// For MESH entities: re-fills shared Embree vertex buffers and re-commits.
+	/// For SDF/VDB entities: updates sdfAnimOffset_ / vdbAnimOffset_ offsets.
+	/// Called from UpdateScene() on the main thread between frames.
+	void UpdateEntityTransforms(float time);
 	void HandleLeftMouseDrag(const ImVec2& mouseDelta);
 	void HandleRightMouseDrag(const ImVec2& mouseDelta);
+
+	/// Tears down ALL scene assets atomically under a unique_lock, ensuring
+	/// every in-flight GetPixel() call (which holds a shared_lock) has
+	/// completed before any pointer/handle is released.  Covers:
+	///   - Embree RTCScene + Surface / Material smart-pointer vectors
+	///   - OpenVKL sampler + volume (device is preserved for reuse)
+	///   - VdbLoader (clears stale grid / bounding-box caches)
+	///   - Volumetric SDF observer list (fixedSdfScene_ ownership untouched)
+	/// Do NOT hold sceneMutex_ before calling this function.
+	void ClearScene();
+
+	/// Clears current geometry/volume, configures lights, loads assets described
+	/// by @p desc, and sets the rendering mode specified by the scene entry.
+	void LoadSceneFromDescription(const SceneDescription& desc);
+
+	/// Maps a mode token string to the RenderingMode enum (kept for legacy/debug use).
+	/// Defaults to SURFACE_EMBREE for unrecognised strings.
+	RenderingMode ModeFromString(const std::string& modeStr) const;
+
+	/// Derives the active RenderingMode from currentFilter_ and objUsePathTracing_,
+	/// taking into account which assets are actually loaded.
+	/// Called once per frame from MoveCamera() to update currentRenderingMode_.
+	RenderingMode ResolveActiveMode() const;
 
 	/// Marches a secondary shadow ray through the SDF volume (Beer-Lambert).
 	/// @returns Transmittance ∈ [0,1]; 1=fully lit, 0=fully shadowed.
@@ -407,9 +561,33 @@ private:
 		const Vector3& samplePoint, const Vector3& lightPos) const;
 
 	/// Evaluates the normalised Henyey-Greenstein phase function.
-	/// @param cosTheta  cos(angle between incoming and outgoing directions).
-	/// @param g         Asymmetry factor ∈ (-1,1); 0=isotropic.
 	[[nodiscard]] static float EvaluateHenyeyGreenstein(float cosTheta, float g);
+
+	// --- Path tracing helpers ---
+
+	/// Balanced MIS heuristic (Veach 1997, n_i = 1, n = 2):
+	///   w_a = p_a / (p_a + p_b)
+	/// For delta (point) lights p_b→0, so w_a = 1 (reduces to pure NEE).
+	[[nodiscard]] static float BalancedHeuristic(float p_a, float p_b);
+
+	/// Builds a right-handed orthonormal basis (Duff et al. 2017).
+	/// @param n   Unit surface normal (the "up" axis of the basis).
+	/// @param t   Output tangent vector.
+	/// @param b   Output bitangent vector.
+	static void BuildONB(const Vector3& n, Vector3& t, Vector3& b);
+
+	/// Generates a cosine-weighted direction on the hemisphere around @p normal.
+	/// PDF = cos(θ)/π.  With a Lambertian BRDF the weight reduces to albedo.
+	[[nodiscard]] static Vector3 SampleHemisphereCosine(const Vector3& normal);
+
+	/// Evaluates direct illumination at a surface point via Next Event Estimation.
+	/// Iterates over all scene lights, casts shadow rays, and accumulates
+	/// the Lambert BRDF-weighted contribution.  No PDF division needed for
+	/// point/directional lights (delta distributions).
+	[[nodiscard]] Vector3 SampleDirectLightPT(
+		const Vector3& hitPoint,
+		const Vector3& normal,
+		const Vector3& albedo) const;
 };
 
 #endif

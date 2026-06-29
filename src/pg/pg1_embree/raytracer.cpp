@@ -2557,7 +2557,7 @@ void RayTracer::LoadPredefinedScene(SceneType type)
 //=============================================================================
 
 /// Maps the mode token string written in scenes.scn to the internal RenderingMode enum.
-RayTracer::RenderingMode RayTracer::ModeFromString(const std::string& modeStr) const
+RenderingMode RayTracer::ModeFromString(const std::string& modeStr) const
 {
 	if (modeStr == "VOLUMETRIC_SDF")      return RenderingMode::VOLUMETRIC_SDF;
 	if (modeStr == "VOLUMETRIC_VDB")      return RenderingMode::VOLUMETRIC_VDB;
@@ -2572,7 +2572,7 @@ RayTracer::RenderingMode RayTracer::ModeFromString(const std::string& modeStr) c
 /// checking which assets are actually loaded so invalid combinations are avoided.
 /// Called from MoveCamera() each frame to update currentRenderingMode_ before
 /// the OMP pixel dispatch, ensuring thread-safe read of a stable cached value.
-RayTracer::RenderingMode RayTracer::ResolveActiveMode() const
+RenderingMode RayTracer::ResolveActiveMode() const
 {
 	const bool hasMesh = !surfaces_.empty();
 	const bool hasVdb  = HasVdbVolume();
