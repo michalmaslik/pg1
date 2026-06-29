@@ -110,7 +110,7 @@ public:
     }
 
     // Generates noise for a given point
-    float Generate(const Vector3& point) const {
+    [[nodiscard]] float Generate(const Vector3& point) const {
         Vector3 scaledPoint = point * scale_;  // Create scaled copy
         
         switch (type_) {
@@ -139,13 +139,13 @@ private:
     float strength_;  // Strength of the noise
 
     // Computes Perlin noise for a given point
-    float PerlinNoise(const Vector3& point) const {
+    [[nodiscard]] float PerlinNoise(const Vector3& point) const {
         // Simple procedural noise - could be improved with real Perlin noise
         return sin(point.x) * cos(point.y) * sin(point.z);
     }
 
     // Computes fractal Brownian motion (FBM) for a given point
-    float FractalBrownianMotion(const Vector3& point) const {
+    [[nodiscard]] float FractalBrownianMotion(const Vector3& point) const {
         return fbm_4(point);  // fbm_4 now takes copy, so this is safe
     }
 };

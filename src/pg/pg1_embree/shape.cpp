@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "shape.h"
 
-// Static member initialization: Enables noise by default
-bool Shape::useNoise = true;
+// Poznamka: staticka promenna useNoise byla odstranna.
+// Priznak sumu je nyni instancni (noiseEnabled_) a propaguje se
+// pres setNoiseEnabled() v kazdem tvar / SmoothUnion.

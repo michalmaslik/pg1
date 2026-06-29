@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -183,10 +183,14 @@
     <ClInclude Include="material.h" />
     <ClInclude Include="matrix3x3.h" />
     <ClInclude Include="mymath.h" />
+    <ClInclude Include="noise.h" />
     <ClInclude Include="objloader.h" />
+    <ClInclude Include="plane.h" />
     <ClInclude Include="raytracer.h" />
     <ClInclude Include="shape.h" />
     <ClInclude Include="simpleguidx11.h" />
+    <ClInclude Include="smooth_union.h" />
+    <ClInclude Include="sphere.h" />
     <ClInclude Include="stdafx.h" />
     <ClInclude Include="structs.h" />
     <ClInclude Include="surface.h" />
@@ -197,6 +201,7 @@
     <ClInclude Include="utils.h" />
     <ClInclude Include="vdb_loader.h" />
     <ClInclude Include="vector3.h" />
+    <ClInclude Include="vector4.h" />
     <ClInclude Include="vertex.h" />
   </ItemGroup>
   <ItemGroup>
@@ -230,11 +235,13 @@
     <ClCompile Include="utils.cpp" />
     <ClCompile Include="vdb_loader.cpp" />
     <ClCompile Include="vector3.cpp" />
+    <ClCompile Include="vector4.cpp" />
     <ClCompile Include="vertex.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="api.md" />
     <None Include="README.md" />
+    <None Include="REPORT.md" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

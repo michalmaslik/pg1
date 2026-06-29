@@ -133,43 +133,43 @@ int LoadMTL(const char* file_name, const char* path, std::vector<Material*>& mat
 					Color3f ambient;
 					sscanf(tmp, "%*s %f %f %f", &ambient.r, &ambient.g, &ambient.b);
 					ambient.Expand();
-					material->ambient = Vector3(ambient.r, ambient.g, ambient.b);
+					material->SetAmbient(Vector3(ambient.r, ambient.g, ambient.b));
 				}
 				if (strstr(tmp, "Kd") == tmp) // diffuse color of the material
 				{
 					Color3f diffuse;
 					sscanf(tmp, "%*s %f %f %f", &diffuse.r, &diffuse.g, &diffuse.b);
 					diffuse.Expand();
-					material->diffuse = Vector3(diffuse.r, diffuse.g, diffuse.b);
+					material->SetDiffuse(Vector3(diffuse.r, diffuse.g, diffuse.b));
 				}
 				if (strstr(tmp, "Ks") == tmp) // specular color of the material
 				{
 					Color3f specular;
 					sscanf(tmp, "%*s %f %f %f", &specular.r, &specular.g, &specular.b);
 					specular.Expand();
-					material->specular = Vector3(specular.r, specular.g, specular.b);
+					material->SetSpecular(Vector3(specular.r, specular.g, specular.b));
 				}
 				if (strstr(tmp, "Ke") == tmp) // emission color of the material
 				{
-					sscanf(tmp, "%*s %f %f %f", &material->emission.x, &material->emission.y, &material->emission.z);
+					Vector3 em_{}; sscanf(tmp, "%*s %f %f %f", &em_.x, &em_.y, &em_.z); material->SetEmission(em_);
 				}
 				if (strstr(tmp, "Ns") == tmp) // specular coefficient
 				{
-					sscanf(tmp, "%*s %f", &material->shininess);
+					float sh_ = 0.0f; sscanf(tmp, "%*s %f", &sh_); material->SetShininess(sh_);
 				}
 				if (strstr(tmp, "Ni") == tmp) // 
 				{
-					sscanf(tmp, "%*s %f", &material->ior);
+					float ior_ = 0.0f; sscanf(tmp, "%*s %f", &ior_); material->SetIor(ior_);
 				}
 				if (strstr(tmp, "Tf") == tmp) // 
 				{
 					Vector3 attenuation;
 					sscanf(tmp, "%*s %f %f %f", &attenuation.x, &attenuation.y, &attenuation.z);
-					material->attenuation = attenuation;
+					material->SetAttenuation(attenuation);
 				}
 				if (strstr(tmp, "shader") == tmp) // 
 				{
-					sscanf(tmp, "%*s %i", &material->shader);
+					int sd_ = -1; sscanf(tmp, "%*s %i", &sd_); material->SetShader(sd_);
 				}
 				if (strstr(tmp, "map_Kd") == tmp) // diffuse map
 				{

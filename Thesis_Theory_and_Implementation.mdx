@@ -1,0 +1,405 @@
+# Theory and Implementation of a Hybrid Surface-Volumetric Ray Tracer
+
+**Author:** Michal Maslik  
+**Context:** Master's Thesis — Computer Graphics Chapter  
+**Date:** 2024–2025
+
+---
+
+## Abstract
+
+This chapter presents a rigorous cross-referential analysis of the theoretical foundations and their concrete C++ implementation in a hybrid physically-based renderer. The system combines Intel Embree BVH-accelerated triangle-mesh surface tracing with SDF-based volumetric ray marching governed by the Beer-Lambert law. Every major theoretical construct — the Radiative Transfer Equation, BRDF evaluation, Beer-Lambert transmittance, the Henyey-Greenstein phase function, the Porter-Duff *over* operator, and the Reader-Writer concurrency lock — is mapped precisely to the responsible functions and line numbers in the source.
+
+---
+
+## 1. Introduction to the Hybrid Architecture
+
+Modern physically-based renderers must address two structurally distinct representations simultaneously. Solid objects (mechanical assemblies, characters) are most efficiently represented as triangle meshes whose ray intersections are well-posed algebraic problems amenable to hierarchical acceleration. Participating media (clouds, smoke, fire) cannot be reduced to a surface; they require integration of optical properties along the entire ray path through a volume.
+
+The system addresses both requirements through a dual-pipeline architecture formalised in the `RenderingMode` enum (`raytracer.h`, line 248):
+
+```
+SURFACE_EMBREE   — BVH triangle-mesh tracing only
+VOLUMETRIC_SDF   — SDF-based cloud ray marching only
+VOLUMETRIC_VDB   — OpenVDB sparse-volume ray marching via OpenVKL
+COMBINED_SDF     — depth-correct composite of both pipelines
+```
+
+The central dispatch function `RenderPixel` (`raytracer.cpp`, line 808) acts as the architectural seam. In `COMBINED_SDF` mode it first queries the Embree BVH for the nearest opaque surface hit distance $t_\text{surf}$, passes that depth as an upper bound to the volumetric marcher, then composites both contributions using the Porter-Duff *over* operator.
+
+---
+
+## 2. Theoretical Surface Rendering and Embree Integration
+
+### 2.1 Pinhole Camera Model and Primary Ray Generation
+
+The pinhole camera (`camera.cpp`, line 111) is parameterised by focal length $f_y$ derived from the vertical field-of-view angle $\varphi_y$:
+
+$$f_y = \frac{H}{2\tan(\varphi_y / 2)}$$
+
+For pixel $(x_i, y_i)$, the camera-space direction vector is:
+
+$$\mathbf{d}_c = \left(x_i - \tfrac{W}{2},\; \tfrac{H}{2} - y_i,\; -f_y\right)$$
+
+This is normalised and rotated to world space by the camera-to-world matrix $M_{cw}$, constructed from the orthonormal basis of the camera frame (`camera.cpp`, lines 26–33). The implementation:
+
+```cpp
+// camera.cpp, line 120
+Vector3 d_c = Vector3{ x_i - width_ / 2, height_ / 2 - y_i, -f_y_ };
+d_c.Normalize();
+Vector3 d_w = RotateCamera() * d_c;   // M_cw · d_c
+```
+
+### 2.2 BVH Acceleration Theory
+
+Naïve ray-triangle intersection is $O(N)$ in triangle count $N$. Intel Embree builds a **BVH4/BVH8** hierarchy using the **Surface Area Heuristic** (SAH), reducing intersection queries to $O(\log N)$. The SAH partitions at each node to minimise the expected cost:
+
+$$C = C_\text{trav} + \frac{S(A)}{S(P)}\, C_A \cdot |A| + \frac{S(B)}{S(P)}\, C_B \cdot |B|$$
+
+where $S(\cdot)$ denotes surface area and $C_A$, $C_B$ are the costs of testing the child subtrees.
+
+BVH construction is triggered by `rtcCommitScene(scene_)` after all geometry is registered. Thereafter, each call to:
+
+```cpp
+rtcIntersect1(scene_, &context, &rayHit);   // raytracer.cpp, line 698
+```
+
+traverses the hierarchy and populates `rayHit.ray.tfar` with the closest hit distance $t$ and `rayHit.hit.primID` with the primitive index.
+
+### 2.3 Barycentric Coordinate Interpolation
+
+The ray-triangle intersection (Möller–Trumbore algorithm) solves:
+
+$$\mathbf{o} + t\mathbf{d} = (1 - u - v)\mathbf{v}_0 + u\mathbf{v}_1 + v\mathbf{v}_2$$
+
+Embree stores the barycentric coordinates $(u, v)$ in `rayHit.hit.u` and `rayHit.hit.v`. The interpolated shading normal and texture UV are recovered via:
+
+$$\mathbf{n}(\mathbf{p}) = (1-u-v)\,\mathbf{n}_0 + u\,\mathbf{n}_1 + v\,\mathbf{n}_2$$
+
+```cpp
+// raytracer.cpp, lines 728–729 (TraceRay) / lines 1870–1871 (TraceRayExtended)
+rtcInterpolate0(geometry, rayHit.hit.primID, rayHit.hit.u, rayHit.hit.v,
+    RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE, 0, &normal.x, 3);
+
+// lines 739–740 / 1876–1877: texture UV
+rtcInterpolate0(geometry, rayHit.hit.primID, rayHit.hit.u, rayHit.hit.v,
+    RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE, 1, &texCoord.u, 2);
+```
+
+### 2.4 Local Illumination BRDFs
+
+The general reflectance equation for outgoing radiance $L_o$ is:
+
+$$L_o(\mathbf{p}, \omega_o) = \int_{\Omega^+} f_r(\omega_i, \omega_o)\, L_i(\mathbf{p}, \omega_i)\,(\mathbf{n}\cdot\omega_i)\, d\omega_i$$
+
+**Lambert BRDF** — $f_r = \rho_d / \pi$ (isotropic diffuse). The $1/\pi$ is absorbed into the light definition, leaving:
+
+$$L_o^\text{diff} = \rho_d \cdot L_i \cdot \max(0, \mathbf{n}\cdot\mathbf{l})$$
+
+```cpp
+// raytracer.cpp, line 386 (LambertShader)
+outputColor += diffuseColor * clamp(normalVector.DotProduct(l));
+```
+
+**Phong BRDF** — augments diffuse with an empirical specular lobe centred on the mirror-reflection direction $\mathbf{r} = 2(\mathbf{l}\cdot\mathbf{n})\mathbf{n} - \mathbf{l}$:
+
+$$L_o^\text{spec} = \rho_s \cdot L_i \cdot \max(0, \mathbf{r}\cdot\mathbf{v})^{s_h}$$
+
+```cpp
+// raytracer.cpp, lines 430–438 (PhongShader)
+Vector3 l_r = 2.0f * (l.DotProduct(normalVector) * normalVector) - l;
+outputColor += specularColor * powf(clamp(l_r.DotProduct(-directionVector)), material.shininess);
+```
+
+**Fresnel / Transparent BRDF** — for dielectric materials, the reflection coefficient is computed from the exact Fresnel equations (`raytracer.cpp`, lines 490–492):
+
+$$r_s = \left(\frac{n_2 c_2 - n_1 c_1}{n_2 c_2 + n_1 c_1}\right)^2, \quad r_p = \left(\frac{n_2 c_1 - n_1 c_2}{n_2 c_1 + n_1 c_2}\right)^2, \quad r = \frac{r_s + r_p}{2}$$
+
+where $c_1 = \cos\theta_1$, $c_2 = \cos\theta_2$ from Snell's law $n_1\sin\theta_1 = n_2\sin\theta_2$.
+
+### 2.5 `TraceRayExtended`: Surface Colour with Geometric Depth
+
+`TraceRayExtended` (`raytracer.cpp`, lines 1827–1887) is a specialised variant of `TraceRay` that also returns the raw hit parameter `tHit = rayHit.ray.tfar` packaged in the `SurfaceHit` struct:
+
+```cpp
+struct SurfaceHit { Vector3 color; float tHit; bool hasHit; };
+```
+
+This $t_\text{surf}$ is the bridging quantity between the two pipelines: it is passed as `tMax` to `VolumetricEffect`, causing the volumetric marcher to terminate its integration at exactly the depth of the opaque surface—preventing the volume from accumulating density *behind* solid geometry.
+
+---
+
+## 3. Volumetric Rendering Theory and Implementation
+
+### 3.1 Physics of Participating Media
+
+A *participating medium* interacts with radiation at every point along a ray. Three optical processes govern this interaction:
+
+- **Absorption** ($\sigma_a$): photons converted to heat — attenuates radiance.
+- **Out-scattering** ($\sigma_s$): photons deflected away — also attenuates radiance.
+- **In-scattering** ($\sigma_s$): photons from other directions redirected into the ray — adds radiance.
+
+The **extinction coefficient** $\sigma_t = \sigma_a + \sigma_s$ characterises total attenuation. The parameter `absorptionCoefficient_` (default $0.5$, `raytracer.h`, line 186) serves as $\sigma_t$ in the implementation.
+
+### 3.2 The Radiative Transfer Equation
+
+The complete physics of in-medium light transport is described by the **Radiative Transfer Equation** (RTE) along direction $\omega$:
+
+$$\frac{dL(\mathbf{x}, \omega)}{ds} = -\sigma_t(\mathbf{x}) L(\mathbf{x}, \omega) + \sigma_s(\mathbf{x}) \int_{S^2} p(\omega', \omega)\, L(\mathbf{x}, \omega')\, d\omega' + \sigma_a(\mathbf{x})\, L_e(\mathbf{x})$$
+
+The formal solution along a ray of length $S$ is:
+
+$$L(\mathbf{x}_0, \omega) = \int_0^S T(0, t)\left[\sigma_s(\mathbf{x}_t) \int_{S^2} p(\omega', \omega)\, L_i(\mathbf{x}_t, \omega')\, d\omega'\right] dt + L_\text{bg}\cdot T(0, S)$$
+
+where the **Beer-Lambert transmittance** from $0$ to $t$ is:
+
+$$\boxed{T(0, t) = \exp\!\left(-\int_0^t \sigma_t(\mathbf{x}_{t'})\, dt'\right)}$$
+
+### 3.3 Beer-Lambert Law: The Discrete Riemann Sum
+
+Because $\sigma_t(\mathbf{x})$ varies spatially, the continuous transmittance integral admits no closed form. The marching loop approximates it as a **Riemann product** over $N$ discrete steps of width $\Delta t$:
+
+$$T_N = \prod_{i=0}^{N-1} e^{-\sigma_t \cdot \rho_i \cdot \Delta t_i}$$
+
+In `VolumetricEffect` (`raytracer.cpp`, lines 543–596), `remainingT` maintains this running product. The critical line (line 567) is:
+
+```cpp
+remainingT *= expf(-absorptionCoefficient_ * density * stepSize_);
+```
+
+- `absorptionCoefficient_` $\equiv \sigma_t$
+- `density = std::min(-sdf, 1.0f)` (line 565) — local optical density derived from the SDF; when `sdf < 0`, the ray is inside the cloud and $|\text{sdf}|$ proxies density
+- `stepSize_` $\equiv \Delta t$
+
+The **differential transmittance weight** (line 568) quantifies the energy absorbed in step $i$:
+
+$$w_i = T_{i-1} - T_i = T_{i-1}\!\left(1 - e^{-\sigma_t \rho_i \Delta t}\right)$$
+
+```cpp
+const float prevT       = remainingT;       // T_{i-1}
+remainingT             *= expf(-absorptionCoefficient_ * density * stepSize_);
+const float absorptionW = prevT - remainingT;   // w_i
+```
+
+The in-scattered radiance is accumulated (line 590):
+
+```cpp
+inScattered += absorptionW * shadowT * volumetricAlbedoVec_ * lc;
+```
+
+representing the Riemann sum $\sum_i w_i \cdot \xi_i \cdot \rho_d \cdot L_i^\text{light}$ where $\xi_i$ is the shadow transmittance. The function returns (line 595):
+
+```cpp
+return Vector4(inScattered, 1.0f - remainingT);   // (colour, opacity α)
+```
+
+The opacity $\alpha = 1 - T_N$ is the fraction of background blocked by the cloud — the correct quantity for Porter-Duff compositing.
+
+### 3.4 Henyey-Greenstein Phase Function
+
+The phase function governs the directional distribution of in-scattered radiance. The isotropic case $p = 1/(4\pi)$ is the default. The **Henyey-Greenstein** (HG) model provides a parameterised anisotropic alternative:
+
+$$\boxed{p_\text{HG}(\cos\theta, g) = \frac{1}{4\pi} \cdot \frac{1 - g^2}{\left(1 + g^2 - 2g\cos\theta\right)^{3/2}}}$$
+
+where $g \in (-1, 1)$ is the asymmetry factor ($g=0$: isotropic; $g>0$: forward-scattering as in Mie water-droplet scattering; $g<0$: back-scattering). The implementation (`raytracer.cpp`, lines 1780–1786):
+
+```cpp
+float RayTracer::EvaluateHenyeyGreenstein(const float cosTheta, const float g)
+{
+    constexpr float kInv4Pi = 1.0f / (4.0f * static_cast<float>(M_PI));
+    const float g2  = g * g;
+    const float den = 1.0f + g2 - 2.0f * g * cosTheta;
+    return kInv4Pi * (1.0f - g2) / (den * sqrtf(den));   // den^(3/2)
+}
+```
+
+`den * sqrtf(den)` computes $\text{den}^{3/2}$ without a more expensive `powf` call. The parameter `phaseG_` (default $0.0$) is exposed in the ImGui panel for real-time adjustment.
+
+### 3.5 SDF Cloud Model and Smooth Union
+
+The cloud is constructed as a **smooth Boolean union** of three spheres (`raytracer.cpp`, lines 1642–1646). The sphere SDF is (`sphere.h`, line 28):
+
+$$f_\text{sphere}(\mathbf{p}) = \|\mathbf{p} - \mathbf{c}\|_2 - r$$
+
+The smooth union of two SDF values with blending radius $k$ (Quilez, 2013) is $C^1$-continuous:
+
+$$h = \text{clamp}\!\left(\tfrac{1}{2} + \tfrac{d_2 - d_1}{2k},\; 0,\; 1\right), \quad f_\text{smooth} = (1-h)\,d_2 + h\,d_1 - k\,h\,(1-h)$$
+
+```cpp
+// smooth_union.h, lines 59–62
+float h = clamp(0.5f + 0.5f * (d2 - d1) / k, 0.0f, 1.0f);
+return (d2 * (1.0f - h) + d1 * h) - k * h * (1.0f - h);
+```
+
+The corrective term $-kh(1-h)$ creates a smooth convex bulge in the transition zone of width $2k$. fBm noise is additively applied to the SDF (`noise.h`, lines 73–87), summing 4 octaves with frequency doubling ($f=2$) and amplitude halving ($s=0.5$):
+
+$$\text{fBm}(\mathbf{p}) = \sum_{i=0}^{3} \frac{1}{2^i}\, n\!\left(2^i M^i \mathbf{p}\right)$$
+
+where $M$ is a rotation matrix (noise.h, lines 66–70) that decorrelates successive octaves to prevent grid-aligned artefacts.
+
+### 3.6 Adaptive Ray Marching: Combining Sphere Tracing and Uniform Stepping
+
+**Uniform ray marching** samples at fixed $\Delta t$, wasting iterations in empty space where `sdf > 0`. **SDF sphere tracing** (Hart, 1996) uses the Lipschitz property of the SDF — because $|\nabla f| \leq 1$, advancing by $f(\mathbf{p})$ is a guaranteed safe step that cannot overshoot any surface.
+
+The implementation unifies both strategies in a single expression (`raytracer.cpp`, line 557):
+
+$$\Delta t_i = \max(\Delta t_\text{fixed},\; \text{sdf}(\mathbf{p}_i))$$
+
+```cpp
+t += std::max(stepSize_, sdf);
+```
+
+| Region | `sdf` value | Effective step | Behaviour |
+|---|---|---|---|
+| Outside cloud, far | $\text{sdf} \gg \Delta t$ | $\text{sdf}$ | Sphere-trace: skip empty space |
+| Near surface | $0 < \text{sdf} \leq \Delta t$ | $\Delta t$ | Careful uniform approach |
+| Inside cloud | $\text{sdf} < 0$ | $\Delta t$ | Dense uniform sampling |
+
+When inside the cloud, `std::max(stepSize_, sdf)` evaluates to `stepSize_` since `stepSize_ > 0 > sdf`. When in empty space, the larger `sdf` allows entire spheres of empty space to be skipped per iteration, reducing the effective step count by up to an order of magnitude.
+
+### 3.7 Volumetric Self-Shadowing
+
+Real clouds self-shadow: cloud material between a sample point and a light source attenuates the arriving light. `ComputeVolumeShadowTransmittance` (`raytracer.cpp`, lines 1792–1818) launches a secondary shadow ray toward each point light and applies the same Beer-Lambert Riemann product:
+
+```cpp
+// raytracer.cpp, line 1814
+visibility *= expf(-absorptionCoefficient_ * density * shadowStep);
+```
+
+The returned scalar $\xi_i \in [0,1]$ is the transmittance along the shadow ray — the fraction of light that reaches the sample. It enters the primary accumulation as the `shadowT` factor at line 590, correctly modulating in-scattered contributions by the degree of self-shadowing.
+
+---
+
+## 4. Deep Compositing Theory
+
+### 4.1 The Porter-Duff *Over* Operator
+
+Porter and Duff (1984) formalised digital image compositing. Their foundational *over* operator for foreground $A$ (colour $C_A$, coverage $\alpha_A$) over background $B$:
+
+$$\boxed{C_\text{out} = C_A + C_B \cdot (1 - \alpha_A)}$$
+
+The fraction $\alpha_A$ of the pixel is occupied by $A$; the remaining fraction $(1 - \alpha_A)$ reveals $B$. The operator is associative, enabling correct layering of arbitrary depth-ordered contributions.
+
+### 4.2 Surface-Volume Compositing in `COMBINED_SDF`
+
+The `COMBINED_SDF` dispatch (`raytracer.cpp`, lines 904–909) realises the Porter-Duff *over* operator with the volume as foreground and the shaded surface as background:
+
+```cpp
+const SurfaceHit surf  = TraceRayExtended(ray);
+const float      tSurf = surf.hasHit ? surf.tHit : FLT_MAX;
+const Vector4    vol   = VolumetricEffect(ray, tSurf);   // tSurf clips the march
+const Vector3    out   = Vector3(vol.x, vol.y, vol.z) + surf.color * (1.0f - vol.w);
+```
+
+Decomposing the final expression:
+
+$$C_\text{out} = \underbrace{C_\text{vol}}_{\texttt{vol.xyz} = \texttt{inScattered}} + \underbrace{C_\text{surf} \cdot T_N}_{\texttt{surf.color} \cdot (1 - \texttt{vol.w})}$$
+
+where:
+- $C_\text{vol}$ — accumulated in-scattered radiance through the cloud.
+- $\alpha_\text{vol} = \texttt{vol.w} = 1 - T_N$ — cloud opacity.
+- $T_N = 1 - \alpha_\text{vol}$ — remaining transmittance; fraction of surface radiance reaching the camera.
+- `tSurf` passed as `tMax` stops the march at the surface depth (line 558), preventing the volume from accumulating density behind the opaque geometry.
+
+The depth-clip mechanism is the key correctness invariant: without it, a ray hitting a surface through a cloud would incorrectly integrate density from the surface's far side, over-darkening the composite.
+
+In `VOLUMETRIC_SDF` mode the same operator composites the cloud over the background (line 898):
+
+```cpp
+const Vector3 out = Vector3(vol.x, vol.y, vol.z) + bg * (1.0f - vol.w);
+```
+
+where `bg` is either the emissive light-sphere colour or the sky/cubemap, handling all depth orderings correctly.
+
+---
+
+## 5. Concurrency and Thread Synchronisation Model
+
+### 5.1 Race Conditions in Real-Time Rendering
+
+A **race condition** occurs when the outcome of a computation depends on the non-deterministic ordering of concurrent memory accesses, with at least one access being a write. In the C++ memory model, such unsynchronised concurrent access to a shared variable is **undefined behaviour**.
+
+The critical hazard in this renderer is as follows. The rendering loop calls `GetPixel` for every pixel — in parallel across multiple threads — which invokes `rtcIntersect1(scene_, ...)`, reading `scene_` and `surfaces_`. Concurrently, the ImGui *Load OBJ* button triggers `LoadObjModel` on the UI thread, which calls `ClearSurfaceModels`, which:
+
+1. Deletes all `Surface*` objects (memory deallocation).
+2. Calls `rtcReleaseScene(scene_)` — frees the Embree scene.
+3. Calls `rtcNewScene(device_)` — allocates a new scene.
+
+If a rendering thread is mid-execution of `rtcIntersect1(scene_, ...)` while step 2 runs concurrently, the renderer is dereferencing a freed pointer — a **use-after-free race condition** causing undefined behaviour (crash or silent corruption).
+
+### 5.2 The Reader-Writer Lock Paradigm
+
+The theoretical solution is the **Reader-Writer lock**, based on the observation:
+
+- **Readers** (rendering threads) only *read* shared state. Multiple readers can hold the lock concurrently without interfering.
+- **Writers** (asset-reload threads) *mutate* shared state. A writer requires **exclusive** access; no reader or other writer may hold the lock simultaneously.
+
+The formal invariants:
+
+1. Any number of simultaneous readers is permitted when no writer holds the lock.
+2. A writer holding the lock excludes all other threads.
+3. A waiting writer blocks new reader acquisitions (write-preferring policy), preventing writer starvation.
+
+### 5.3 `std::shared_mutex` Implementation
+
+The implementation declares one `shared_mutex` guarding all mutable scene assets (`raytracer.h`, line 324):
+
+```cpp
+mutable std::shared_mutex sceneMutex_;
+```
+
+`mutable` permits lock acquisition from `const`-qualified methods without violating const-correctness.
+
+**Rendering threads (readers)** — `GetPixel`, `raytracer.cpp`, line 765:
+
+```cpp
+std::shared_lock<std::shared_mutex> renderLock(sceneMutex_);
+```
+
+`std::shared_lock` is RAII: it acquires in *shared mode* (non-exclusive, multiple holders permitted) at construction and auto-releases at scope exit. The entire pixel computation — BVH traversal, BRDF evaluation, volumetric marching, compositing — executes while the shared lock is held.
+
+**Asset-reload operations (writers)** — `LoadObjModel`, line 1657:
+
+```cpp
+std::unique_lock<std::shared_mutex> reloadLock(sceneMutex_);
+```
+
+And `LoadVdbVolume`, line 1362:
+
+```cpp
+std::unique_lock<std::shared_mutex> reloadLock(sceneMutex_);
+```
+
+`std::unique_lock` acquires in *exclusive mode*, blocking until all currently held `shared_lock` instances are released. Once held, all new `shared_lock` acquisitions block until the unique lock is released.
+
+### 5.4 Theoretical Guarantees and Practical Consequences
+
+**Correctness:** The C++ standard (`[thread.sharedmutex.requirements]`) guarantees that `unique_lock::lock()` does not return until all outstanding `shared_lock` holders have released. This eliminates the use-after-free race by construction: `ClearSurfaceModels` and `rtcReleaseScene` can only execute after all rendering threads have completed their current `GetPixel` calls.
+
+**Performance (common case):** In every frame where no asset reload is requested, `GetPixel` acquires a `shared_lock` (non-blocking, as no writer competes), performs the full render, and releases it. Multiple rendering threads hold the `shared_lock` simultaneously with no mutual contention. The overhead is a handful of atomic compare-and-swap instructions — negligible against the cost of BVH traversal or volumetric marching.
+
+**Graceful serialisation during reloads:** On a user-triggered `LoadObjModel`, the UI thread blocks until all in-flight `GetPixel` calls complete, performs the asset swap atomically, and releases the exclusive lock. The next frame's rendering threads see a fully consistent new scene with no intermediate partially-constructed state.
+
+---
+
+## 6. Conclusion
+
+This chapter has established a one-to-one mapping between the principal theoretical constructs of physically-based rendering and their concrete implementation in the hybrid ray tracer. The key correspondences are:
+
+- **RTE → `VolumetricEffect`:** The continuous Beer-Lambert transmittance integral is discretised as the Riemann product `remainingT *= expf(-absorptionCoefficient_ * density * stepSize_)` (line 567), and in-scattering is accumulated as the weighted sum `inScattered += absorptionW * shadowT * volumetricAlbedoVec_ * lc` (line 590).
+- **Adaptive march → `std::max(stepSize_, sdf)`:** A single expression (line 557) unifies sphere tracing for empty space and uniform stepping inside the cloud, achieving the correctness of the former and the efficiency of the latter.
+- **Henyey-Greenstein → `EvaluateHenyeyGreenstein`:** The exact analytic formula $(1-g^2)/[4\pi(1+g^2-2g\cos\theta)^{3/2}]$ is implemented directly (lines 1780–1786).
+- **Porter-Duff *over* → `RenderPixel` COMBINED_SDF:** The expression `vol.xyz + surf.color * (1.0f - vol.w)` (line 908) is the *over* operator with $\alpha = 1 - T_N$, depth-clipped by passing `tSurf` to `VolumetricEffect`.
+- **Reader-Writer lock → `std::shared_mutex`:** Rendering threads acquire `shared_lock` (line 765); asset reloaders acquire `unique_lock` (lines 1657, 1362). C++ standard guarantees preclude any use-after-free race between concurrent rendering and asset mutation.
+
+---
+
+## References
+
+- Porter, T. & Duff, T. (1984). *Compositing Digital Images*. ACM SIGGRAPH Computer Graphics, 18(3), 253–259.
+- Hart, J.C. (1996). *Sphere Tracing: A Geometric Method for the Antialiased Ray Tracing of Implicit Surfaces*. The Visual Computer, 12(10), 527–545.
+- Henyey, L.G. & Greenstein, J.L. (1941). *Diffuse radiation in the galaxy*. Astrophysical Journal, 93, 70–83.
+- Pharr, M., Jakob, W. & Humphreys, G. (2016). *Physically Based Rendering: From Theory to Implementation* (3rd ed.). Morgan Kaufmann.
+- Quilez, I. (2013). *Smooth minimum*. Retrieved from https://iquilezles.org/articles/smin/
+- Intel Corporation (2013–2024). *Embree: High Performance Ray Tracing Kernels*. https://www.embree.org/
+- Chandrasekhar, S. (1960). *Radiative Transfer*. Dover Publications.

@@ -16,6 +16,8 @@
 #include "vector4.h"
 #include <openvkl/openvkl.h>
 #include "vdb_loader.h"
+#include <memory>
+#include <shared_mutex>
 
 
 /*! \class RayTracer
@@ -53,6 +55,13 @@ Key Features:
 \version 1.0
 \date 2024
 */
+
+// Stores the result of an extended surface ray query (color + hit distance)
+struct SurfaceHit {
+	Vector3 color;       // Shaded surface color (or background color on miss)
+	float   tHit;        // Ray parameter t at hit point; FLT_MAX if no geometry was hit
+	bool    hasHit;      // true if a triangle was intersected
+};
 
 // Represents a transformation in 3D space, including position, scale, and rotation
 struct Transform {
@@ -112,7 +121,7 @@ public:
 	//=============================================================================
 
 	// Checks if a point is visible from a light source (shadow ray test)
-	bool IsHitPointVisible(const Vector3& hitPoint, const Vector3& lightPoint);
+	[[nodiscard]] bool IsHitPointVisible(const Vector3& hitPoint, const Vector3& lightPoint) const;
 
 	//=============================================================================
 	// RENDERING PIPELINE
@@ -126,6 +135,10 @@ public:
 
 	// Main ray tracing function: Traces a ray through the scene using Intel Embree
 	Vector3 TraceRay(const RTCRay& ray, const float n_1 = 1.0f, const int depth = 0, const int maxDepth = 10);
+
+	// Extended ray query: returns shaded color AND the Embree hit distance (tHit).
+	// Used by COMBINED_SDF mode so the volume marcher can stop at the surface boundary.
+	SurfaceHit TraceRayExtended(const RTCRay& ray, const float n_1 = 1.0f, const int depth = 0, const int maxDepth = 10);
 
 	//=============================================================================
 	// SURFACE SHADING MODELS (for Embree-traced triangle meshes)
@@ -144,7 +157,7 @@ public:
 	Vector4 VolumetricRender(const RTCRay& ray);
 
 	// RAY MARCHING: True volumetric rendering with Beer-Lambert absorption
-	Vector4 VolumetricEffect(const RTCRay& ray);
+	Vector4 VolumetricEffect(const RTCRay& ray, float tMax = FLT_MAX);
 
 	// SPHERE TRACING: Surface-only rendering of SDF shapes using adaptive stepping
 	Vector4 SurfaceEffect(const RTCRay& ray);
@@ -156,42 +169,8 @@ public:
 	// Renders the ImGui interface for controlling ray tracing parameters
 	int Ui() override;
 
-	//=============================================================================
-	// RENDERING SETTINGS
-	//=============================================================================
-
-	// === SDF & NOISE PARAMETERS ===
-	bool useNoise_{ true };               // Enable/disable procedural noise on SDF shapes
-	float noiseScale_{ 0.7f };            // Spatial scale of the noise pattern
-	float noiseStrength_{ 3.0f };         // Amplitude/strength of noise displacement
-	float smoothFactor_{ 1.0f };          // Smoothness factor for SDF boolean operations
-
-	// === VOLUMETRIC RENDERING PARAMETERS ===
-	bool rayMarching_{ false };           // true = Volume mode, false = Surface mode
-	float stepSize_{ 0.01f };             // Step size for ray marching (smaller = higher quality)
-	float maxDistance_{ 50.0f };          // Maximum ray marching distance
-	int maxSteps_ = static_cast<int>(maxDistance_ / stepSize_); // Maximum number of ray marching steps
-	float absorptionCoefficient_{ 0.5f }; // Beer-Lambert absorption coefficient
-	float lightAttenuationFactor_{ 1.65f }; // Distance-based light attenuation exponent
-
-	// Volumetric material properties
-	float volumetricAlbedo_[3]{ 0.0f, 0.0f, 0.0f };    // Albedo color picker for UI
-	Vector3 volumetricAlbedoVec_{ 0.0f, 0.0f, 0.0f };  // Volumetric albedo as Vector3
-
-	// === ANTI-ALIASING ===
-	bool sampling_{ false };              // Enable/disable 4x4 supersampling anti-aliasing
-
-	// === BACKGROUND SETTINGS ===
-	bool backgroundEnabled_{ false };     // true = use cubemap, false = solid color
-	float backgroundColor_[3]{ 1.0f, 1.0f, 1.0f };     // Background color picker for UI
-	Vector3 backgroundColorVec_{ 1.0f, 1.0f, 1.0f };   // Background color as Vector3
-
-	// === CAMERA ANIMATION ===
-	bool cameraMovementEnabled_{ true };  // Enable/disable automatic camera orbit animation
-	bool mouseCameraInput_{ false };
-	float cameraX_{ 0.0f };               // Manual camera X position
-	float cameraY_{ 0.0f };               // Manual camera Y position
-	float cameraZ_{ 0.0f };               // Manual camera Z position
+	// NOTE: All rendering-parameter data members are in the private section below.
+	// They are accessible from Ui() and all other member functions without restriction.
 
 	//=============================================================================
 	// VDB VOLUME MANAGEMENT
@@ -215,20 +194,37 @@ public:
 	//! Get VDB volume bounding box
 	void GetVdbVolumeBounds(Vector3& minBounds, Vector3& maxBounds) const;
 
+	//! Get current FPS
 	float GetCurrentFPS() const;
 
-	//=============================================================================
 // RENDERING MODE MANAGEMENT
 //=============================================================================
 
 	enum class RenderingMode {
 		SURFACE_EMBREE,     // Traditional triangle mesh rendering with Embree
 		VOLUMETRIC_SDF,     // SDF-based volumetric shapes
-		VOLUMETRIC_VDB      // VDB volumes with OpenVKL
+		VOLUMETRIC_VDB,     // VDB volumes with OpenVKL
+		COMBINED_SDF        // Deep composite: SDF volume in front of Embree surface
 	};
 
 	void SetRenderingMode(RenderingMode mode) { currentRenderingMode_ = mode; }
 	RenderingMode GetRenderingMode() const { return currentRenderingMode_; }
+
+	//=============================================================================
+// SCENE MANAGEMENT
+//=============================================================================
+
+	enum class SceneType {
+		SCENE_SHADERTOY_SDF,  // ShaderToy-style SDF volumetric scene with 3 animated coloured lights
+		SCENE_CUSTOM_OBJ,     // Arbitrary OBJ file loaded at runtime, rendered with Embree
+		SCENE_CUSTOM_VDB      // Arbitrary VDB file loaded at runtime, rendered with OpenVKL
+	};
+
+	// Load a predefined scene configuration
+	void LoadPredefinedScene(SceneType type);
+
+	// Update scene animation (called each frame)
+	void UpdateScene(float time);
 
 	// Main pixel rendering dispatch
 	Vector4 RenderPixel(const RTCRay& ray);
@@ -248,95 +244,172 @@ public:
 
 
 private:
-	//=============================================================================
-	// OPENVKL VDB VOLUME RENDERING
-	//=============================================================================
+	// =========================================================================
+	// THREAD SYNCHRONISATION
+	// =========================================================================
 
-	VKLDevice vklDevice_;        // OpenVKL device for volumetric rendering
-	VKLVolume vklVolume_;        // OpenVKL VDB volume
-	VKLSampler vklSampler_;      // OpenVKL sampler for the volume
-	std::unique_ptr<VdbLoader> vdbLoader_; // VDB file loader
+	/// Protects all scene assets (Embree scene, surfaces, materials, VKL volume)
+	/// from concurrent access during reload operations.
+	/// Rendering threads acquire a shared_lock; asset reload takes a unique_lock
+	/// that waits for all in-flight renders to drain before proceeding.
+	mutable std::shared_mutex sceneMutex_;
 
+	// =========================================================================
+	// INTEL EMBREE RAY TRACING ENGINE
+	// =========================================================================
 
-	//=============================================================================
-	// SCENE DATA
-	//=============================================================================
+	RTCDevice device_;      ///< Embree device handle
+	RTCScene  scene_;       ///< Active scene — rebuilt by ClearSurfaceModels()
 
-	// VOLUMETRIC SHAPES: Procedural SDF-based shapes for ray marching
+	// =========================================================================
+	// SCENE GEOMETRY & ASSETS  (smart-pointer ownership)
+	// =========================================================================
+
+	/// Owned triangle-mesh surfaces; raw Surface* passed to Embree via .get().
+	std::vector<std::unique_ptr<Surface>>  surfaces_;
+
+	/// Owned materials; raw Material* stored in Embree geometry user-data via .get().
+	std::vector<std::unique_ptr<Material>> materials_;
+
+	/// Non-owning observer pointers to volumetric SDF shapes.
+	/// Actual ownership lives in fixedSdfScene_ (or future per-scene owners).
 	std::vector<Shape*> volumetricShapes_;
 
-	// SURFACE GEOMETRY: Triangle meshes loaded from OBJ files for Embree
-	std::vector<Surface*> surfaces_;       // Triangle mesh surfaces
-	std::vector<Material*> materials_;     // Materials associated with surfaces
+	/// The procedural 3-sphere cloud, owned exclusively here.
+	std::unique_ptr<SmoothUnion> fixedSdfScene_;
 
-	// ENVIRONMENT MAPPING
-	CubeMap* cubemap_ = nullptr;           // Environment map for background and reflections
+	/// Environment map for background and reflections.
+	std::unique_ptr<CubeMap> cubemap_;
 
-	//=============================================================================
-	// INTEL EMBREE RAY TRACING ENGINE
-	//=============================================================================
+	// =========================================================================
+	// OPENVKL VDB VOLUME RENDERING
+	// =========================================================================
 
-	RTCDevice device_;                     // Embree device handle
-	RTCScene scene_;                       // Embree scene containing BVH acceleration structure
+	VKLDevice                  vklDevice_{};  ///< OpenVKL device
+	VKLVolume                  vklVolume_{};  ///< OpenVKL VDB volume
+	VKLSampler                 vklSampler_{}; ///< OpenVKL sampler
+	std::unique_ptr<VdbLoader> vdbLoader_;    ///< VDB file loader
 
-	//=============================================================================
-	// SCENE COMPONENTS
-	//=============================================================================
+	// =========================================================================
+	// CAMERA & LIGHTS
+	// =========================================================================
 
-	Camera camera_;                        // Pin-hole camera for ray generation
-	Light light_;                          // Point light source for illumination
+	Camera             camera_;  ///< Pin-hole camera for primary ray generation
+	Light              light_;   ///< Legacy single-light (Lambert/Phong/SurfaceEffect)
+	std::vector<Light> lights_;  ///< Multi-light list for volumetric illumination
 
-	//=============================================================================
-	// UI STATE MANAGEMENT
-	//=============================================================================
+	// =========================================================================
+	// RENDERING PARAMETERS  (formerly public — still accessible from Ui() etc.)
+	// =========================================================================
 
-	// Rendering control
-	bool renderingPaused_{ false };        // Controls if rendering is paused
-	bool singleFrameRender_{ false };      // Render single frame when paused
-	bool autoRotateCamera_{ false };        // Auto-rotate camera when not paused
+	// --- SDF & Noise ---
+	bool  useNoise_{ true };       ///< Enable procedural fBm noise on SDF shapes
+	float noiseScale_{ 0.7f };     ///< Spatial frequency of the noise pattern
+	float noiseStrength_{ 3.0f };  ///< Amplitude of noise displacement
+	float smoothFactor_{ 1.0f };   ///< Blending radius for smooth-union operations
 
-	// UI grouping and state
-	bool showVdbControls_{ true };          // Show/hide VDB section
-	bool showRayMarchingControls_{ true };  // Show/hide ray marching section
-	bool showCameraControls_{ true };      // Show/hide camera section
-	bool showLightingControls_{ true };    // Show/hide lighting section
-	bool showRenderingControls_{ true };   // Show/hide rendering section
+	// --- Volumetric ray marching ---
+	bool  rayMarching_{ true };               ///< true=volume march, false=sphere-trace surface
+	float stepSize_{ 0.6f };                  ///< Primary march step Δt
+	float maxDistance_{ 500.0f };             ///< Far-plane clamp for the march
+	int   maxSteps_{ 256 };                   ///< Hard cap on march iterations
+	float absorptionCoefficient_{ 0.5f };     ///< σ_t for Beer-Lambert extinction
+	float lightAttenuationFactor_{ 1.65f };   ///< Exponent n in 1/d^n attenuation
+	float lightAnimSpeed_{ 1.0f };            ///< Speed multiplier for orbiting lights
+	float phaseG_{ 0.0f };                    ///< Henyey-Greenstein g (0=isotropic)
+	float emissiveLightSphereRadius_{ 0.8f }; ///< Radius of the emissive light proxy sphere
 
-	// VDB UI state
+	float   volumetricAlbedo_[3]{ 0.8f, 0.8f, 0.8f }; ///< Albedo for ImGui colour picker
+	Vector3 volumetricAlbedoVec_{ 0.8f, 0.8f, 0.8f }; ///< Albedo as Vector3
+
+	// --- Whitted surface tracing ---
+	int   maxRecursionDepth_{ 5 };            ///< Max recursion depth for reflections/refractions
+	float shadowBias_{ 0.001f };              ///< Ray-origin offset to prevent self-shadowing
+	bool  enableShadows_{ true };             ///< Toggle shadow rays
+	bool  materialOverride_{ false };         ///< Override all materials with global values
+	float globalShininess_{ 32.0f };          ///< Global shininess override
+	float globalAmbient_[3]{ 0.1f, 0.1f, 0.1f };  ///< Ambient colour for ImGui
+	Vector3 globalAmbientVec_{ 0.1f, 0.1f, 0.1f }; ///< Global ambient as Vector3
+
+	// --- Anti-aliasing ---
+	bool sampling_{ false }; ///< Enable 4×4 supersampling MSAA
+
+	// --- Debug ---
+	bool showDebugAxes_{ false }; ///< Draw RGB XYZ axis lines from the world origin
+
+	// --- Background ---
+	bool    backgroundEnabled_{ false };                     ///< true=cubemap, false=solid colour
+	float   backgroundColor_[3]{ 0.0f, 0.0f, 0.0f };       ///< Background colour for ImGui
+	Vector3 backgroundColorVec_{ 0.0f, 0.0f, 0.0f };        ///< Background colour as Vector3
+
+	// --- Camera animation ---
+	bool cameraMovementEnabled_{ true }; ///< Enable automatic camera orbit
+	bool mouseCameraInput_{ false };     ///< Enable mouse-driven orbit
+
+	// =========================================================================
+	// CAMERA ORBITAL CONTROL STATE
+	// =========================================================================
+
+	float cameraDistance_{ 20.0f };         ///< Orbital radius from viewAt
+	float cameraAzimuth_{ 0.0f };           ///< Horizontal angle (degrees)
+	float cameraElevation_{ 0.0f };         ///< Vertical angle (degrees)
+	float cameraX_{ 0.0f };
+	float cameraY_{ 0.0f };
+	float cameraZ_{ 0.0f };
+	float initialCameraDistance_{ 20.0f };
+	float initialCameraAzimuth_{ 0.0f };
+	float initialCameraElevation_{ 0.0f };
+	Vector3 initialLightOrigin_;
+	float minCameraDistance_{ 2.0f };       ///< Near zoom clamp
+	float maxCameraDistance_{ 300.0f };     ///< Far zoom clamp
+	float maxElevation_{ 89.0f };           ///< Elevation clamp (prevent gimbal lock)
+	bool  leftMouseDragging_{ false };
+	bool  rightMouseDragging_{ false };
+	ImVec2 lastMousePos_{ 0.0f, 0.0f };
+
+	// =========================================================================
+	// SCENE MANAGEMENT STATE
+	// =========================================================================
+
+	RenderingMode currentRenderingMode_{ RenderingMode::SURFACE_EMBREE };
+	SceneType     currentScene_{ SceneType::SCENE_SHADERTOY_SDF };
+	float         sceneTime_{ 0.0f }; ///< Accumulated animation time (seconds)
+
+	// =========================================================================
+	// UI VISIBILITY FLAGS
+	// =========================================================================
+
+	bool showVdbControls_{ true };
+	bool showRayMarchingControls_{ true };
+	bool showCameraControls_{ true };
+	bool showLightingControls_{ true };
+	bool showRenderingControls_{ true };
+	bool renderingPaused_{ false };
+	bool singleFrameRender_{ false };
+	bool autoRotateCamera_{ false };
+
+	// VDB file path buffers for ImGui text inputs
 	char vdbFilePath_[512]{ "C:\\Users\\micha\\Desktop\\file.vdb" };
 	char vdbGridName_[64]{ "density" };
 
-	//=============================================================================
-// CAMERA CONTROL STATE
-//=============================================================================
+	// =========================================================================
+	// PRIVATE HELPER METHODS
+	// =========================================================================
 
-// Orbital camera parameters
-	float cameraDistance_{ 20.0f };        // Distance from viewAt (0,0,0)
-	float cameraAzimuth_{ 0.0f };           // Horizontal rotation angle (degrees)
-	float cameraElevation_{ 0.0f };         // Vertical rotation angle (degrees)
-
-	// Camera control constraints
-	float minCameraDistance_{ 2.0f };       // Minimum zoom distance
-	float maxCameraDistance_{ 300.0f };     // Maximum zoom distance
-	float maxElevation_{ 89.0f };           // Maximum elevation angle (prevent gimbal lock)
-
-	// Mouse state for camera control
-	bool leftMouseDragging_{ false };
-	bool rightMouseDragging_{ false };
-	ImVec2 lastMousePos_{ 0.0f, 0.0f };
-
-	// Camera control methods
+	void InitializeFixedSdfScene();
 	void UpdateCameraPosition();
 	void HandleLeftMouseDrag(const ImVec2& mouseDelta);
 	void HandleRightMouseDrag(const ImVec2& mouseDelta);
 
-	RenderingMode currentRenderingMode_{ RenderingMode::SURFACE_EMBREE };
+	/// Marches a secondary shadow ray through the SDF volume (Beer-Lambert).
+	/// @returns Transmittance ∈ [0,1]; 1=fully lit, 0=fully shadowed.
+	[[nodiscard]] float ComputeVolumeShadowTransmittance(
+		const Vector3& samplePoint, const Vector3& lightPos) const;
 
-	// Fixed SDF scene - created once at startup
-	SmoothUnion* fixedSdfScene_;
-
-	// Simplified loading - no more ModelInfo storage
-	void InitializeFixedSdfScene();
+	/// Evaluates the normalised Henyey-Greenstein phase function.
+	/// @param cosTheta  cos(angle between incoming and outgoing directions).
+	/// @param g         Asymmetry factor ∈ (-1,1); 0=isotropic.
+	[[nodiscard]] static float EvaluateHenyeyGreenstein(float cosTheta, float g);
 };
 
 #endif

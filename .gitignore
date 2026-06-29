@@ -1,5 +1,6 @@
-src/pg/pg1_embree/frames
-src/libs/opencv
+src/pg/pg1_embree/frames/
+src/libs/
+data/
 .vscode/
 
 # Windows thumbnail cache files
@@ -31,3 +32,4 @@ Thumbs.db
 # Ignore all files in x64 folder (including Debug/Release folders)
 src/pg/pg1_embree/x64/
 src/pg/x64/
+

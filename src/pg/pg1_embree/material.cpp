@@ -8,22 +8,22 @@ const char Material::kOpacityMapSlot = 3;
 
 Material::Material()
 {
-	// defaultní materiál
-	ambient = Vector3(0.1f, 0.1f, 0.1f);
-	diffuse = Vector3(0.4f, 0.4f, 0.4f);
-	specular = Vector3(0.8f, 0.8f, 0.8f);
+	ambient_     = Vector3(0.1f, 0.1f, 0.1f);
+	diffuse_     = Vector3(0.4f, 0.4f, 0.4f);
+	specular_    = Vector3(0.8f, 0.8f, 0.8f);
+	emission_    = Vector3(0.0f, 0.0f, 0.0f);
+	attenuation_ = Vector3(0.0f, 0.0f, 0.0f);
+	scattering_  = Vector3(0.0f, 0.0f, 0.0f);
+	absorption_  = Vector3(0.0f, 0.0f, 0.0f);
 
-	emission = Vector3(0.0f, 0.0f, 0.0f);
-
-	reflectivity = static_cast<float>(0.99);
-	shininess = 1;
-
-	ior = -1;
-	attenuation = Vector3(0.0f, 0.0f, 0.0f);
-	shader = -1;
+	reflectivity_ = 0.99f;
+	shininess_    = 1.0f;
+	ior_          = -1.0f;
+	shader_       = -1;
+	density_      = 0.0f;
+	phase_g_      = 0.0f;
 
 	memset(textures_, 0, sizeof(*textures_) * NO_TEXTURES);
-
 	name_ = "default";
 }
 
@@ -31,18 +31,14 @@ Material::Material(std::string& name, const Vector3& ambient, const Vector3& dif
 	const Vector3& specular, const Vector3& emission, const float reflectivity,
 	const float shininess, const float ior, Texture** textures, const int no_textures)
 {
-	name_ = name;
-
-	this->ambient = ambient;
-	this->diffuse = diffuse;
-	this->specular = specular;
-
-	this->emission = emission;
-
-	this->reflectivity = reflectivity;
-	this->shininess = shininess;
-
-	this->ior = ior;
+	name_         = name;
+	ambient_      = ambient;
+	diffuse_      = diffuse;
+	specular_     = specular;
+	emission_     = emission;
+	reflectivity_ = reflectivity;
+	shininess_    = shininess;
+	ior_          = ior;
 
 	if (textures)
 	{
@@ -58,7 +54,7 @@ Material::~Material()
 		{
 			delete[] textures_[i];
 			textures_[i] = nullptr;
-		};
+		}
 	}
 }
 
