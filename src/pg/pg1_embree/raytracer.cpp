@@ -3,6 +3,7 @@
 #include "objloader.h"
 #include "tutorials.h"
 #include "utils.h"
+#include "ShadingUtils.h"
 #include <iostream>
 #include "smooth_union.h"
 #include <opencv2/opencv.hpp>
@@ -287,19 +288,7 @@ void RayTracer::LoadScene(
 // UTILITY FUNCTIONS
 //=============================================================================
 
-RTCRay MakeSecondaryRay(const Vector3& origin, const Vector3& dir) {
-	RTCRay ray = RTCRay();
-	ray.org_x = origin.x;  ray.org_y = origin.y;  ray.org_z = origin.z;
-	ray.tnear = 0.001f;    // Small offset to avoid self-intersection
-
-	ray.dir_x = dir.x;     ray.dir_y = dir.y;     ray.dir_z = dir.z;
-	ray.time = 0.0f;       // Time for motion blur (not used)
-
-	ray.tfar = FLT_MAX;    // Maximum ray distance
-
-	ray.mask = 0;  ray.id = 0;  ray.flags = 0;
-	return ray;
-}
+// makeSecondaryRay -> presunuto do ShadingUtils.cpp
 
 bool RayTracer::IsHitPointVisible(const Vector3& hitPoint, const Vector3& lightPoint) const {
 	// If no surface geometry is loaded, assume point is always visible
@@ -346,29 +335,11 @@ bool RayTracer::IsHitPointVisible(const Vector3& hitPoint, const Vector3& lightP
 // LIGHTING & SHADING UTILITIES
 //=============================================================================
 
-float GetLightAttenuation(const float distanceToLight, const float lightAttenuationFactor)
-{
-	// Distance-based light attenuation: 1/d^n
-	return 1.0f / pow(distanceToLight, lightAttenuationFactor);
-}
+// getLightAttenuation -> presunuto do ShadingUtils.cpp
 
-Vector3 GetAmbientLight()
-{
-	// Constant ambient illumination (slight reddish tint)
-	return 1.2f * Vector3(0.03f, 0.018f, 0.018f);
-}
+// getAmbientLight -> presunuto do ShadingUtils.cpp
 
-Vector3 ComputeNormal(const Vector3& p, const Shape& shape) {
-	// Compute SDF gradient using finite differences (central differences)
-	const float eps = 0.001f; // Small offset for numerical differentiation
-
-	float dx = shape.SDF(p + Vector3(eps, 0.0f, 0.0f)) - shape.SDF(p - Vector3(eps, 0.0f, 0.0f));
-	float dy = shape.SDF(p + Vector3(0.0f, eps, 0.0f)) - shape.SDF(p - Vector3(0.0f, eps, 0.0f));
-	float dz = shape.SDF(p + Vector3(0.0f, 0.0f, eps)) - shape.SDF(p - Vector3(0.0f, 0.0f, eps));
-
-	// Return normalized gradient (surface normal)
-	return Vector3(dx, dy, dz) / (2.0f * eps);
-}
+// computeSdfNormal -> presunuto do ShadingUtils.cpp
 
 //=============================================================================
 // SURFACE SHADING MODELS (for Embree-traced geometry)
@@ -446,7 +417,7 @@ Vector3 RayTracer::PhongShader(const Material& material, const Coord2f& texCoord
 		l_r.Normalize();
 
 		// Trace secondary ray for indirect specular contribution
-		RTCRay secondaryRay = MakeSecondaryRay(hitPoint, l);
+		RTCRay secondaryRay = makeSecondaryRay(hitPoint, l);
 		Vector3 l_i = TraceRay(secondaryRay, depth + 1.0f);
 
 		// Phong specular: I_spec = I_light * k_s * max(0, R·V)^shininess
@@ -532,10 +503,10 @@ Vector3 RayTracer::TransparentShader(const RTCRay& ray, const Vector3& hitPoint,
 	}
 
 	// Trace rays
-	Vector3 refl = TraceRay(MakeSecondaryRay(hitPoint, reflectedRayDirection), n_1, depth + 1);
+	Vector3 refl = TraceRay(makeSecondaryRay(hitPoint, reflectedRayDirection), n_1, depth + 1);
 	Vector3 refr = Vector3(0.0f);
 	if (!totalInternalReflection) {
-		refr = TraceRay(MakeSecondaryRay(hitPoint, refractedRayDirection), n_2, depth + 1);
+		refr = TraceRay(makeSecondaryRay(hitPoint, refractedRayDirection), n_2, depth + 1);
 		// Fallback na cubemap ak refr je úplne čierna a backgroundEnabled_
 		if (refr == Vector3(0.0f) && backgroundEnabled_ && cubemap_ != nullptr) {
 			Color3f bg = cubemap_->GetTexel(refractedRayDirection);
@@ -610,7 +581,7 @@ Vector4 RayTracer::VolumetricEffect(const RTCRay& ray, const float tMax)
 					const Vector3 toLight = light.position - pos;
 					const float   dist    = toLight.L2Norm();
 					lightDir = toLight / dist;
-					atten    = GetLightAttenuation(dist, lightAttenuationFactor_);
+					atten    = getLightAttenuation(dist, lightAttenuationFactor_);
 				} else {
 					lightDir = -light.direction;
 					lightDir.Normalize();
@@ -637,7 +608,7 @@ Vector4 RayTracer::VolumetricEffect(const RTCRay& ray, const float tMax)
 				inScattered += absorptionW * sunT * volumetricAlbedoVec_ * sunLc;
 			}
 
-			inScattered += absorptionW * volumetricAlbedoVec_ * GetAmbientLight();
+			inScattered += absorptionW * volumetricAlbedoVec_ * getAmbientLight();
 		}
 	}
 	return Vector4(inScattered, 1.0f - remainingT);
@@ -673,7 +644,7 @@ Vector4 RayTracer::SurfaceEffect(const RTCRay& ray)
 		// Check if we hit the surface (SDF very close to zero)
 		if (sdfValue < 0.001f) {
 			// Compute surface normal using SDF gradient
-			Vector3 normal = ComputeNormal(position, *shape);
+			Vector3 normal = computeSdfNormal(position, *shape);
 			normal.Normalize();
 
 			Vector3 lightDir = light_.position - position;
@@ -1648,9 +1619,9 @@ Vector4 RayTracer::VdbVolumeRayMarching(const RTCRay& ray, bool compositeBg) {
 			float lightDistance = lightDir.L2Norm();
 			lightDir.Normalize();
 
-			Vector3 lightColor = Vector3(1.0f) * GetLightAttenuation(lightDistance, lightAttenuationFactor_);
+			Vector3 lightColor = Vector3(1.0f) * getLightAttenuation(lightDistance, lightAttenuationFactor_);
 			Vector3 volumeColor = volumetricAlbedoVec_ * lightColor;
-			volumeColor += GetAmbientLight() * volumetricAlbedoVec_;
+			volumeColor += getAmbientLight() * volumetricAlbedoVec_;
 
 			// --- Global Sun in-scattering (VDB) ----------------------------
 			// Directional — parallel rays, no 1/d² attenuation.
@@ -2146,7 +2117,7 @@ Vector3 RayTracer::SampleDirectLightPT(const Vector3& hitPoint,
 			const float   dist    = toLight.L2Norm();
 			if (dist < 1e-4f) continue;
 			lightDir   = toLight / dist;
-			atten      = GetLightAttenuation(dist, lightAttenuationFactor_);
+			atten      = getLightAttenuation(dist, lightAttenuationFactor_);
 			shadowDist = dist;
 		} else { // Directional
 			lightDir   = -light.direction;
@@ -2368,7 +2339,7 @@ Vector3 RayTracer::TracePath(const RTCRay& initialRay, const int maxDepth) const
 		}
 
 		// Advance ray: MakeSecondaryRay applies tnear bias to prevent self-hits
-		ray = MakeSecondaryRay(hitPt, newDir);
+		ray = makeSecondaryRay(hitPt, newDir);
 	}
 
 	return radiance;
