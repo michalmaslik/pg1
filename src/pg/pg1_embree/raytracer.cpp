@@ -1,3 +1,5 @@
+
+
 #include "stdafx.h"
 #include "raytracer.h"
 #include "objloader.h"
@@ -50,6 +52,8 @@ RayTracer::RayTracer(const int width, const int height,
 
 	// Vytvor VdbRenderer a inicializuj OpenVKL
 	vdbRenderer_ = std::make_unique<VdbRenderer>();
+	// Vytvor SdfRenderer (bezstavovy, okamzite pripraveny)
+	sdfRenderer_ = std::make_unique<SdfRenderer>();
 	if (!InitializeOpenVKL()) {
 		std::cerr << "[RAY TRACER WARNING] Failed to initialize OpenVKL" << std::endl;
 	}
@@ -528,159 +532,32 @@ Vector3 RayTracer::TransparentShader(const RTCRay& ray, const Vector3& hitPoint,
 //=============================================================================
 
 Vector4 RayTracer::VolumetricRender(const RTCRay& ray) {
-	// This method now only handles SDF-based volumetric rendering
-	if (rayMarching_) {
-		// RAY MARCHING: Trace through entire SDF volume accumulating color/opacity
-		return VolumetricEffect(ray);
-	}
-	// SPHERE TRACING: Find first SDF surface intersection only  
-	return SurfaceEffect(ray);
+	// Dispatcher: vybere mezi volumetrickym krochovanim a sphere-tracingem
+	if (!sdfRenderer_) return Vector4(0.0f);
+	return sdfRenderer_->render(ray, buildSdfContext(), rayMarching_);
 }
 
 //=============================================================================
-// VOLUMETRIC RAY MARCHING (True volumetric rendering)
+// VOLUMETRICKE KROCHLOVANI PRES SDF (deleguje na SdfRenderer)
 //=============================================================================
 
-/// Front-to-back volumetric ray marching through the SDF cloud, matching the
-/// reference ShaderToy raymarch() loop exactly:
-///   - Adaptive step: max(marchSize, sdf) to sphere-trace outside the cloud.
-///   - Fog density:   clamp(|sdf|, 0, 1) -- deeper inside = denser fog.
-///   - Beer-Lambert:  T_i = exp(-sigma_a * density * dt)
-///   - absorptionWeight = T_prev - T_i  (reference: absorptionFromMarch)
-///   - Shadow: adaptive Beer-Lambert march toward each point light.
-/// @param tMax  Clip the march at this depth (used by COMBINED_SDF).
+/// Front-to-back volumetricke krochlovani skrze SDF oblak.
+/// @param tMax  Orizi krochlovani na tuto vzdalenost (pouziva se v COMBINED_SDF modu).
 Vector4 RayTracer::VolumetricEffect(const RTCRay& ray, const float tMax)
 {
-	if (volumetricShapes_.empty())
-		return Vector4(0.0f, 0.0f, 0.0f, 0.0f);
-
-	const Vector3 rayOrigin(ray.org_x, ray.org_y, ray.org_z);
-	const Vector3 direction(ray.dir_x, ray.dir_y, ray.dir_z);
-
-	float   remainingT = 1.0f;
-	Vector3 inScattered(0.0f);
-	float   t   = 0.0f;
-	float   sdf = 0.0f;
-
-	for (int i = 0; i < maxSteps_; ++i) {
-		t += std::max(stepSize_, sdf);
-		if (t > tMax || t > maxDistance_) break;
-		if (remainingT < 0.01f)           break;
-
-		const Vector3 pos = rayOrigin + direction * t;
-		sdf = volumetricShapes_[0]->SDF(pos - sdfAnimOffset_);
-
-		if (sdf < 0.0f) {
-			const float density        = std::min(-sdf, 1.0f);
-			const float prevT          = remainingT;
-			remainingT                *= expf(-absorptionCoefficient_ * density * stepSize_);
-			const float absorptionW    = prevT - remainingT;
-
-			for (const Light& light : lights_) {
-				Vector3 lightDir;
-				float   atten;
-				if (light.type == LightType::Point) {
-					const Vector3 toLight = light.position - pos;
-					const float   dist    = toLight.L2Norm();
-					lightDir = toLight / dist;
-					atten    = getLightAttenuation(dist, lightAttenuationFactor_);
-				} else {
-					lightDir = -light.direction;
-					lightDir.Normalize();
-					atten = 1.0f;
-				}
-				const Vector3 lc   = light.color * (light.intensity * atten);
-				const float   luma = lc.x * 0.3f + lc.y * 0.59f + lc.z * 0.11f;
-				if (luma < 0.009f) continue;
-
-				const float shadowT = (light.type == LightType::Point)
-				? ComputeVolumeShadowTransmittance(pos, light.position)
-				: 1.0f;
-				inScattered += absorptionW * shadowT * volumetricAlbedoVec_ * lc;
-			}
-
-			// --- Global Sun in-scattering -----------------------------------
-			// Cast a volumetric shadow ray toward the sun (to infinity).
-			// ComputeVolumeShadowTransmittance accepts a virtual point far along
-			// the sun direction, producing a self-shadowing transmittance value.
-			if (frameSunEnabled_) {
-				const Vector3 sunPt  = pos + frameSunDir_ * maxDistance_;
-				const float   sunT   = ComputeVolumeShadowTransmittance(pos, sunPt);
-				const Vector3 sunLc  = frameSunColor_ * frameSunIntensity_;
-				inScattered += absorptionW * sunT * volumetricAlbedoVec_ * sunLc;
-			}
-
-			inScattered += absorptionW * volumetricAlbedoVec_ * getAmbientLight();
-		}
-	}
-	return Vector4(inScattered, 1.0f - remainingT);
+	if (!sdfRenderer_) return Vector4(0.0f);
+	return sdfRenderer_->volumetricEffect(ray, buildSdfContext(), tMax);
 }
 
 //=============================================================================
-// SDF SPHERE TRACING (Surface rendering for SDF shapes)
+// SPHERE-TRACING (deleguje na SdfRenderer)
 //=============================================================================
 
 Vector4 RayTracer::SurfaceEffect(const RTCRay& ray)
 {
-	/*
-	 * SPHERE TRACING ALGORITHM:
-	 * 1. Use SDF value as safe step distance (won't overshoot surface)
-	 * 2. March ray by SDF distance at each step
-	 * 3. Stop when very close to surface (SDF ≈ 0)
-	 * 4. Apply surface shading (Phong model)
-	 * 5. Return single surface color with full opacity
-	 */
-
-	Vector3 position(ray.org_x, ray.org_y, ray.org_z);
-	Vector3 direction(ray.dir_x, ray.dir_y, ray.dir_z);
-	direction.Normalize();
-
-	// Sphere tracing loop
-	for (int i = 0; i < 1000; ++i) {
-		if (position.L2Norm() > maxDistance_) break;
-
-		if (volumetricShapes_.empty()) break;
-		Shape* shape = volumetricShapes_[0];
-		float sdfValue = shape->SDF(position);
-
-		// Check if we hit the surface (SDF very close to zero)
-		if (sdfValue < 0.001f) {
-			// Compute surface normal using SDF gradient
-			Vector3 normal = computeSdfNormal(position, *shape);
-			normal.Normalize();
-
-			Vector3 lightDir = light_.position - position;
-			lightDir.Normalize();
-
-			// PHONG LIGHTING MODEL
-			// Ambient component
-			Vector3 ambientColor(0.025f, 0.025f, 0.025f);
-			Vector3 color = ambientColor;
-
-			// Diffuse component: Lambert's Law
-			float diffuse = std::max(0.0f, normal.DotProduct(lightDir));
-			if (IsHitPointVisible(position, light_.position)) {
-				color += Vector3(diffuse);
-			}
-
-			// Specular component: Phong reflection model
-			Vector3 viewDir = -direction;
-			Vector3 reflectDir = 2.0f * normal.DotProduct(lightDir) * normal - lightDir;
-			float spec = powf(std::max(viewDir.DotProduct(reflectDir), 0.0f), 32.0f); // Shininess = 32
-			color += Vector3(spec);
-
-			// Return surface color with full opacity (solid surface)
-			return Vector4(color, 1.0f);
-		}
-
-		// SPHERE TRACING: Step by SDF distance (safe - won't overshoot surface)
-		position += direction * sdfValue;
-	}
-
-	// No surface hit - return transparent
-	return Vector4(0.0f);
+	if (!sdfRenderer_) return Vector4(0.0f);
+	return sdfRenderer_->surfaceEffect(ray, buildSdfContext());
 }
-
 //=============================================================================
 // MAIN RAY TRACING ENGINE (Embree-based surface ray tracing)
 //=============================================================================
@@ -1795,37 +1672,37 @@ float RayTracer::EvaluateHenyeyGreenstein(const float cosTheta, const float g)
 }
 
 /// Marches an adaptive shadow ray from a volume sample point toward a point
-/// light, computing Beer-Lambert transmittance through intervening SDF cloud.
-/// Matches GetLightVisiblity() in the reference ShaderToy (25-step quality).
-/// @returns Transmittance in [0,1]: 1 = fully lit, 0 = fully shadowed.
+/// Vypocita propustnost volumetrickeho stinu � deleguje na SdfRenderer.
+/// @returns Propustnost v [0,1]: 1 = plne osvetleno, 0 = plne zastinovano.
 float RayTracer::ComputeVolumeShadowTransmittance(const Vector3& samplePoint,
 	const Vector3& lightPos) const
 {
-	if (volumetricShapes_.empty()) return 1.0f;
-
-	const Vector3 toLight    = lightPos - samplePoint;
-	const float   lightDist  = toLight.L2Norm();
-	const Vector3 shadowDir  = toLight / lightDist;
-	// lightMarchSize = 0.65 * MARCH_MULTIPLIER in reference (ratio vs primary 0.6)
-	const float   shadowStep = stepSize_ * (0.65f / 0.6f);
-
-	float t             = 0.0f;
-	float visibility    = 1.0f;
-	float sdf           = 0.0f;
-
-	for (int i = 0; i < 25; ++i) {
-		t += std::max(shadowStep, sdf);
-		if (t >= lightDist || visibility < 0.01f) break;
-
-		sdf = volumetricShapes_[0]->SDF(samplePoint + shadowDir * t - sdfAnimOffset_);
-		if (sdf < 0.0f) {
-			const float density = std::min(-sdf, 1.0f);
-			visibility *= expf(-absorptionCoefficient_ * density * shadowStep);
-		}
-	}
-	return visibility;
+	if (!sdfRenderer_) return 1.0f;
+	return sdfRenderer_->computeShadowTransmittance(samplePoint, lightPos, buildSdfContext());
 }
 
+SdfRenderContext RayTracer::buildSdfContext() const
+{
+	SdfRenderContext ctx{
+		volumetricShapes_,
+		sdfAnimOffset_,
+		stepSize_,
+		maxDistance_,
+		maxSteps_,
+		absorptionCoefficient_,
+		lightAttenuationFactor_,
+		volumetricAlbedoVec_,
+		lights_,
+		light_,
+		frameSunEnabled_,
+		frameSunDir_,
+		frameSunColor_,
+		frameSunIntensity_,
+		// Callback pro viditelnost: abstrakce Embree shadow ray
+		[this](const Vector3& p, const Vector3& l) { return IsHitPointVisible(p, l); }
+	};
+	return ctx;
+}
 //=============================================================================
 // PATH TRACING ENGINE  (new pipeline — does not touch TraceRay or shaders)
 //=============================================================================

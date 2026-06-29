@@ -15,6 +15,7 @@
 #include "smooth_union.h"
 #include "vector4.h"
 #include "VdbRenderer.h"
+#include "SdfRenderer.h"
 #include "SceneLoader.h"
 #include <memory>
 #include <shared_mutex>
@@ -327,6 +328,9 @@ private:
 	/// Vlastni cely OpenVKL subsystem (device, volume, sampler, loader).
 	std::unique_ptr<VdbRenderer> vdbRenderer_;
 
+	/// Bezstavova trida pro SDF volumetricke krochlovani a sphere-tracing.
+	std::unique_ptr<SdfRenderer> sdfRenderer_;
+
 	// =========================================================================
 	// CAMERA & LIGHTS
 	// =========================================================================
@@ -543,7 +547,7 @@ private:
 	/// by @p desc, and sets the rendering mode specified by the scene entry.
 	void LoadSceneFromDescription(const SceneDescription& desc);
 
-	/// Sestavi VdbRenderContext z aktualniho stavu RayTraceru (volano pred rayMarch).`r`n	[[nodiscard]] VdbRenderContext buildVdbContext() const;`r`n`r`n	/// Maps a mode token string to the RenderingMode enum (kept for legacy/debug use).
+	/// Sestavi SdfRenderContext z aktualniho (frame-stabilniho) stavu rendereru.`r`n	[[nodiscard]] SdfRenderContext buildSdfContext() const;`r`n`r`n	/// Sestavi VdbRenderContext z aktualniho stavu RayTraceru (volano pred rayMarch).`r`n	[[nodiscard]] VdbRenderContext buildVdbContext() const;`r`n`r`n	/// Maps a mode token string to the RenderingMode enum (kept for legacy/debug use).
 	/// Defaults to SURFACE_EMBREE for unrecognised strings.
 	RenderingMode ModeFromString(const std::string& modeStr) const;
 
