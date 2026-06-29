@@ -17,6 +17,7 @@
 #include "VdbRenderer.h"
 #include "SdfRenderer.h"
 #include "PathTracer.h"
+#include "RayTracerUI.h"
 #include "SceneLoader.h"
 #include <memory>
 #include <shared_mutex>
@@ -84,9 +85,13 @@ struct ModelInfo {
 
 
 
+// Dopredna deklarace -- RayTracerUI je friend a implementuje Ui() panel
+class RayTracerUI;
+
 // Main ray tracer class, inheriting from SimpleGuiDX11 for GUI and rendering support
 class RayTracer : public SimpleGuiDX11
 {
+	friend class RayTracerUI;
 public:
 	//=============================================================================
 	// INITIALIZATION & CLEANUP
@@ -303,6 +308,9 @@ private:
 
 	/// Bezstavova trida pro Monte Carlo sledovani cest.
 	std::unique_ptr<PathTracer> pathTracer_;
+
+	/// ImGui UI kontroler -- implementuje Ui() panel pres friend pristup.
+	std::unique_ptr<RayTracerUI> uiController_;
 
 	/// Spravce stavu sceny -- animace, popis scen, svetla.
 	std::unique_ptr<SceneManager> sceneManager_;
