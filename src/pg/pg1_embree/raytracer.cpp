@@ -54,6 +54,8 @@ RayTracer::RayTracer(const int width, const int height,
 	vdbRenderer_ = std::make_unique<VdbRenderer>();
 	// Vytvor SdfRenderer (bezstavovy, okamzite pripraveny)
 	sdfRenderer_ = std::make_unique<SdfRenderer>();
+	// Vytvor PathTracer (bezstavovy, okamzite pripraveny)
+	pathTracer_ = std::make_unique<PathTracer>();
 	if (!InitializeOpenVKL()) {
 		std::cerr << "[RAY TRACER WARNING] Failed to initialize OpenVKL" << std::endl;
 	}
@@ -1663,356 +1665,58 @@ void RayTracer::ClearScene()
 /// p(cos_theta, g) = (1 - g^2) / (4*pi * (1 + g^2 - 2*g*cos_theta)^(3/2))
 /// @param cosTheta  Dot product of incoming and outgoing direction.
 /// @param g         Asymmetry factor in (-1,1); 0 = isotropic.
-float RayTracer::EvaluateHenyeyGreenstein(const float cosTheta, const float g)
-{
-	constexpr float kInv4Pi = 1.0f / (4.0f * static_cast<float>(M_PI));
-	const float g2  = g * g;
-	const float den = 1.0f + g2 - 2.0f * g * cosTheta;
-	return kInv4Pi * (1.0f - g2) / (den * sqrtf(den));
+//=============================================================================
+// PATH TRACING: STATICKE POMOCNE METODY (deleguji na PathTracer)
+//=============================================================================
+
+float RayTracer::EvaluateHenyeyGreenstein(const float cosTheta, const float g) {
+	return PathTracer::evaluateHenyeyGreenstein(cosTheta, g);
 }
 
-/// Marches an adaptive shadow ray from a volume sample point toward a point
-/// Vypocita propustnost volumetrickeho stinu � deleguje na SdfRenderer.
-/// @returns Propustnost v [0,1]: 1 = plne osvetleno, 0 = plne zastinovano.
-float RayTracer::ComputeVolumeShadowTransmittance(const Vector3& samplePoint,
-	const Vector3& lightPos) const
-{
-	if (!sdfRenderer_) return 1.0f;
-	return sdfRenderer_->computeShadowTransmittance(samplePoint, lightPos, buildSdfContext());
+float RayTracer::BalancedHeuristic(const float p_a, const float p_b) {
+	return PathTracer::balancedHeuristic(p_a, p_b);
 }
 
-SdfRenderContext RayTracer::buildSdfContext() const
+void RayTracer::BuildONB(const Vector3& n, Vector3& t, Vector3& b) {
+	PathTracer::buildONB(n, t, b);
+}
+
+Vector3 RayTracer::SampleHemisphereCosine(const Vector3& normal) {
+	return PathTracer::sampleHemisphereCosine(normal);
+}
+
+Vector3 RayTracer::SampleDirectLightPT(const Vector3& hitPoint,
+	const Vector3& normal, const Vector3& albedo) const
 {
-	SdfRenderContext ctx{
-		volumetricShapes_,
-		sdfAnimOffset_,
-		stepSize_,
-		maxDistance_,
-		maxSteps_,
-		absorptionCoefficient_,
-		lightAttenuationFactor_,
-		volumetricAlbedoVec_,
+	if (!pathTracer_) return Vector3(0.0f);
+	return pathTracer_->sampleDirectLight(hitPoint, normal, albedo, buildPathTracingContext());
+}
+
+Vector3 RayTracer::TracePath(const RTCRay& initialRay, const int maxDepth) const {
+	if (!pathTracer_) return Vector3(0.0f);
+	return pathTracer_->tracePath(initialRay, maxDepth, buildPathTracingContext());
+}
+
+/// Sestavi PathTracingContext z aktualniho (frame-stabilniho) stavu rendereru.
+PathTracingContext RayTracer::buildPathTracingContext() const {
+	PathTracingContext ctx{
+		scene_,
+		!surfaces_.empty(),
 		lights_,
-		light_,
+		backgroundEnabled_,
+		backgroundColorVec_,
+		cubemap_.get(),
+		ptRRMinDepth_,
+		maxDistance_,
+		lightAttenuationFactor_,
 		frameSunEnabled_,
 		frameSunDir_,
 		frameSunColor_,
 		frameSunIntensity_,
-		// Callback pro viditelnost: abstrakce Embree shadow ray
 		[this](const Vector3& p, const Vector3& l) { return IsHitPointVisible(p, l); }
 	};
 	return ctx;
 }
-//=============================================================================
-// PATH TRACING ENGINE  (new pipeline — does not touch TraceRay or shaders)
-//=============================================================================
-
-/// Builds a right-handed orthonormal basis around the surface normal n.
-/// Uses the numerically robust method from:
-///   Duff et al. 2017, "Building an Orthonormal Basis, Revisited", JCGT.
-/// Avoids singularities near n = (0,0,±1) unlike simple Gram-Schmidt.
-/// Veach (1997) balanced heuristic for two-strategy MIS (n_1 = n_2 = 1):
-///   w_a = p_a / (p_a + p_b)
-///
-/// When strategy b is a delta-light sample (p_b → 0 for BRDF sampling
-/// toward a point light), the weight reduces to w_a = 1 — pure NEE.
-/// When strategy a is a cosine BRDF sample and b is area-light sampling
-/// (finite p_b), both strategies contribute with calibrated weights.
-float RayTracer::BalancedHeuristic(const float p_a, const float p_b)
-{
-	const float denom = p_a + p_b;
-	return (denom > 0.0f) ? p_a / denom : 0.0f;
-}
-
-void RayTracer::BuildONB(const Vector3& n, Vector3& t, Vector3& b)
-{
-	const float sign = (n.z >= 0.0f) ? 1.0f : -1.0f;
-	const float a    = -1.0f / (sign + n.z);
-	const float c    = n.x * n.y * a;
-	t = Vector3(1.0f + sign * n.x * n.x * a,  sign * c,          -sign * n.x);
-	b = Vector3(c,                              sign + n.y * n.y * a, -n.y);
-}
-
-/// Cosine-weighted hemisphere sampling using Malley's method.
-/// Projects a uniformly sampled unit-disk point up onto the hemisphere:
-///   local z-axis aligns with 'normal'; PDF = cos(θ)/π.
-///
-/// Throughput weight for Lambertian BRDF:
-///   f_r · cos(θ) / pdf  =  (ρ/π · cos(θ)) / (cos(θ)/π)  =  ρ   (exact cancellation)
-Vector3 RayTracer::SampleHemisphereCosine(const Vector3& normal)
-{
-	const float r1  = Random();
-	const float r2  = Random();
-	const float phi = 2.0f * static_cast<float>(M_PI) * r1;
-	const float r   = std::sqrt(r2);
-
-	// Local-space sample: z = cos(θ) = sqrt(1-r2)
-	const float lx = r * std::cos(phi);
-	const float ly = r * std::sin(phi);
-	const float lz = std::sqrt(std::max(0.0f, 1.0f - r2));
-
-	// Build world-space ONB and rotate sample into world space
-	Vector3 t, b;
-	BuildONB(normal, t, b);
-	return t * lx + b * ly + normal * lz;
-}
-
-/// Next Event Estimation — explicit direct light sampling for all scene lights.
-///
-/// For point/directional lights (delta distributions) the estimator simplifies:
-///   L_direct = Σ_k  f_r · L_k · max(0, n·ω_k) · V_k
-///
-/// No PDF denominator is needed because the delta function collapses the
-/// integral analytically — sampling a point light is deterministic once
-/// visibility is established.
-///
-/// Lambert BRDF applied:  f_r = albedo / π,  so
-///   contribution_k = (albedo/π) · L_k · nDotL_k
-Vector3 RayTracer::SampleDirectLightPT(const Vector3& hitPoint,
-	const Vector3& normal,
-	const Vector3& albedo) const
-{
-	constexpr float kInvPi = 1.0f / static_cast<float>(M_PI);
-	Vector3 directLight(0.0f);
-
-	for (const Light& light : lights_) {
-		Vector3 lightDir;
-		float   atten;
-		float   shadowDist;
-
-		if (light.type == LightType::Point) {
-			const Vector3 toLight = light.position - hitPoint;
-			const float   dist    = toLight.L2Norm();
-			if (dist < 1e-4f) continue;
-			lightDir   = toLight / dist;
-			atten      = getLightAttenuation(dist, lightAttenuationFactor_);
-			shadowDist = dist;
-		} else { // Directional
-			lightDir   = -light.direction;
-			lightDir.Normalize();
-			atten      = 1.0f;
-			shadowDist = maxDistance_;
-		}
-
-		const float nDotL = normal.DotProduct(lightDir);
-		if (nDotL <= 0.0f) continue;
-
-		// Shadow test: build a "light point" that IsHitPointVisible understands.
-		// For point lights it's the exact light position; for directional lights
-		// we push a virtual point far along the light direction.
-		const Vector3 lightPt = (light.type == LightType::Point)
-			? light.position
-			: hitPoint + lightDir * shadowDist;
-
-		if (!IsHitPointVisible(hitPoint, lightPt)) continue;
-
-		// Li at the hit point (pre-multiplied colour * intensity * attenuation)
-		const Vector3 Li = light.color * (light.intensity * atten);
-
-		// Lambert BRDF contribution: (albedo/π) · Li · nDotL
-		directLight += Li * albedo * kInvPi * nDotL;
-	}
-
-	// --- Global Sun (directional delta light, PDF = 1) ----------------------
-	// No 1/d² attenuation.  Shadow test pushes a virtual point to infinity
-	// along the sun direction so IsHitPointVisible casts a true shadow ray.
-	if (frameSunEnabled_) {
-		const float nDotSun = normal.DotProduct(frameSunDir_);
-		if (nDotSun > 0.0f) {
-			const Vector3 sunPt = hitPoint + frameSunDir_ * maxDistance_;
-			if (IsHitPointVisible(hitPoint, sunPt)) {
-				const Vector3 Li = frameSunColor_ * frameSunIntensity_;
-				directLight += Li * albedo * kInvPi * nDotSun;
-			}
-		}
-	}
-
-	return directLight;
-}
-
-/// Iterative Monte Carlo path tracer using Embree for BVH intersection.
-///
-/// Transport equation per bounce:
-///   throughput_new = throughput * f_r * cos(θ) / pdf
-///
-/// For diffuse + cosine-weighted sampling this reduces to:
-///   throughput_new = throughput * albedo     (cos/π cancel exactly)
-///
-/// Direct light (NEE) is accumulated separately at each bounce using
-/// SampleDirectLightPT — point lights are delta distributions so no
-/// stochastic sampling or MIS is required.
-///
-/// Russian Roulette starts at depth ptRRMinDepth_:
-///   p_rr = min( max(T_r, T_g, T_b), 0.95 )
-///   surviving paths: throughput /= p_rr  (unbiased correction)
-Vector3 RayTracer::TracePath(const RTCRay& initialRay, const int maxDepth) const
-{
-	if (surfaces_.empty()) {
-		const Vector3 dir(initialRay.dir_x, initialRay.dir_y, initialRay.dir_z);
-		if (backgroundEnabled_ && cubemap_) {
-			const Color3f bg = cubemap_->GetTexel(dir);
-			return Vector3(bg.r, bg.g, bg.b);
-		}
-		return backgroundColorVec_;
-	}
-
-	Vector3  radiance(0.0f, 0.0f, 0.0f);  // accumulated path radiance
-	Vector3  throughput(1.0f, 1.0f, 1.0f); // current path weight
-	RTCRay   ray = initialRay;
-
-	for (int depth = 0; depth < maxDepth; ++depth) {
-
-		// ----------------------------------------------------------------
-		// 1.  Intersect scene via Embree BVH
-		// ----------------------------------------------------------------
-		RTCHit hit{};
-		hit.geomID = RTC_INVALID_GEOMETRY_ID;
-		hit.primID = RTC_INVALID_GEOMETRY_ID;
-
-		RTCRayHit rayHit{};
-		rayHit.ray = ray;
-		rayHit.hit = hit;
-
-		RTCIntersectContext ctx;
-		rtcInitIntersectContext(&ctx);
-		rtcIntersect1(scene_, &ctx, &rayHit);
-
-		// ----------------------------------------------------------------
-		// 2.  Miss — add background radiance and terminate path
-		// ----------------------------------------------------------------
-		if (rayHit.hit.geomID == RTC_INVALID_GEOMETRY_ID) {
-			const Vector3 dir(ray.dir_x, ray.dir_y, ray.dir_z);
-			if (backgroundEnabled_ && cubemap_) {
-				const Color3f bg = cubemap_->GetTexel(dir);
-				radiance += throughput * Vector3(bg.r, bg.g, bg.b);
-			} else {
-				radiance += throughput * backgroundColorVec_;
-			}
-			break;
-		}
-
-		// ----------------------------------------------------------------
-		// 3.  Reconstruct geometry at hit point
-		// ----------------------------------------------------------------
-		const float   tHit = rayHit.ray.tfar;
-		const Vector3 dir(ray.dir_x, ray.dir_y, ray.dir_z);
-		const Vector3 hitPt{
-			ray.org_x + dir.x * tHit,
-			ray.org_y + dir.y * tHit,
-			ray.org_z + dir.z * tHit
-		};
-
-		RTCGeometry      geom = rtcGetGeometry(scene_, rayHit.hit.geomID);
-		const Material*  mat  = static_cast<const Material*>(rtcGetGeometryUserData(geom));
-		if (!mat) break;
-
-		// Interpolate shading normal
-		Normal3f nrm{};
-		rtcInterpolate0(geom, rayHit.hit.primID, rayHit.hit.u, rayHit.hit.v,
-			RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE, 0, &nrm.x, 3);
-		Vector3 n(nrm.x, nrm.y, nrm.z);
-		if (n.DotProduct(dir) > 0.0f) n *= -1.0f; // ensure front-facing
-		n.Normalize();
-
-		// Interpolate UV and fetch albedo (material + optional diffuse map)
-		Coord2f uv{};
-		rtcInterpolate0(geom, rayHit.hit.primID, rayHit.hit.u, rayHit.hit.v,
-			RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE, 1, &uv.u, 2);
-
-		Vector3 albedo = mat->GetDiffuse();
-		Texture* diffTex = mat->get_texture(Material::kDiffuseMapSlot);
-		if (diffTex) {
-			const Color3f c = diffTex->get_texel(uv.u, 1.0f - uv.v);
-			albedo = Vector3(c.r, c.g, c.b);
-		}
-
-		// ----------------------------------------------------------------
-		// 4.  NEE — Direct light contribution (deterministic for delta lights)
-		//     L_direct = throughput · Σ_k (albedo/π · L_k · nDotL_k · V_k)
-		// ----------------------------------------------------------------
-		radiance += throughput * SampleDirectLightPT(hitPt, n, albedo);
-
-		// ----------------------------------------------------------------
-		// 5.  Russian Roulette — unbiased path termination (pr05, slide 59)
-		//     Survival probability is the max component of the SURFACE albedo
-		//     (not the accumulated throughput) — dark surfaces terminate early.
-		//     p_rr = min( max(ρ_r, ρ_g, ρ_b),  0.95 )
-		// ----------------------------------------------------------------
-		if (depth >= ptRRMinDepth_) {
-			const float p_rr = std::min(
-				std::max({ albedo.x, albedo.y, albedo.z }), 0.95f);
-			if (Random() > p_rr) break;
-			throughput /= p_rr; // compensate surviving paths: E[output] = p_rr*(L/p_rr) = L
-		}
-
-		// ----------------------------------------------------------------
-		// 6.  Sample next ray direction based on material type
-		//     throughput is updated with the MIS/BRDF weight per bounce.
-		// ----------------------------------------------------------------
-		const int   shader       = mat->GetShader();
-		const float reflectivity = mat->GetReflectivity();
-		Vector3     newDir(0.0f);
-
-		if (shader == 4) {
-			// --- Dielectric (transparent) — Fresnel-sampled reflect / refract ---
-			// Snell's law:  n1 sin θ1 = n2 sin θ2
-			const float ior    = (mat->GetIor() > 0.0f) ? mat->GetIor() : 1.5f;
-			const float cosT1  = clamp(-dir.DotProduct(n), -1.0f, 1.0f);
-			const float nRatio = 1.0f / ior; // assume entering from air (n1=1)
-			const float sin2T2 = nRatio * nRatio * (1.0f - cosT1 * cosT1);
-
-			const Vector3 reflected = dir - 2.0f * dir.DotProduct(n) * n;
-
-			if (sin2T2 >= 1.0f) {
-				// Total internal reflection
-				newDir = reflected;
-				newDir.Normalize();
-				// throughput unchanged (perfect mirror)
-			} else {
-				const float cosT2 = std::sqrt(std::max(0.0f, 1.0f - sin2T2));
-				const float rs    = powf((ior * cosT2 - cosT1) / (ior * cosT2 + cosT1), 2.0f);
-				const float rp    = powf((ior * cosT1 - cosT2) / (ior * cosT1 + cosT2), 2.0f);
-				const float Fr    = (rs + rp) * 0.5f;
-
-				if (Random() < Fr) {
-					// Fresnel reflection — sampled with probability Fr
-					// weight = Fr / Fr = 1  →  throughput unchanged
-					newDir = reflected;
-					newDir.Normalize();
-				} else {
-					// Fresnel refraction — sampled with probability (1-Fr)
-					// weight = (1-Fr) / (1-Fr) = 1  →  throughput unchanged
-					newDir = nRatio * dir + (nRatio * cosT1 - cosT2) * n;
-					newDir.Normalize();
-				}
-			}
-			// throughput stays the same (energy conserving dielectric)
-
-		} else if (shader == 3 && Random() < reflectivity) {
-			// --- Phong specular bounce (stochastic selection with prob = reflectivity) ---
-			// Mixture BRDF: f_r = reflectivity·k_s·δ + (1-reflectivity)·k_d/π
-			// Sampling specular with prob p_s:
-			//   weight = f_r·cosθ / pdf = p_s·k_s / p_s = k_s
-			newDir = dir - 2.0f * dir.DotProduct(n) * n;
-			newDir.Normalize();
-			throughput = throughput * mat->GetSpecular();
-
-		} else {
-			// --- Lambertian diffuse — cosine-weighted hemisphere sampling ---
-			// PDF   = cos(θ)/π
-			// f_r   = albedo/π
-			// weight = f_r · cos(θ) / pdf = albedo   (exact cancellation)
-			newDir = SampleHemisphereCosine(n);
-			throughput = throughput * albedo;
-		}
-
-		// Advance ray: MakeSecondaryRay applies tnear bias to prevent self-hits
-		ray = makeSecondaryRay(hitPt, newDir);
-	}
-
-	return radiance;
-}
-
 //=============================================================================
 // COMBINED MODE: Embree surface hit with depth (used by COMBINED_SDF)
 //=============================================================================

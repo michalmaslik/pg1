@@ -16,6 +16,7 @@
 #include "vector4.h"
 #include "VdbRenderer.h"
 #include "SdfRenderer.h"
+#include "PathTracer.h"
 #include "SceneLoader.h"
 #include <memory>
 #include <shared_mutex>
@@ -331,6 +332,9 @@ private:
 	/// Bezstavova trida pro SDF volumetricke krochlovani a sphere-tracing.
 	std::unique_ptr<SdfRenderer> sdfRenderer_;
 
+	/// Bezstavova trida pro Monte Carlo sledovani cest.
+	std::unique_ptr<PathTracer> pathTracer_;
+
 	// =========================================================================
 	// CAMERA & LIGHTS
 	// =========================================================================
@@ -547,7 +551,16 @@ private:
 	/// by @p desc, and sets the rendering mode specified by the scene entry.
 	void LoadSceneFromDescription(const SceneDescription& desc);
 
-	/// Sestavi SdfRenderContext z aktualniho (frame-stabilniho) stavu rendereru.`r`n	[[nodiscard]] SdfRenderContext buildSdfContext() const;`r`n`r`n	/// Sestavi VdbRenderContext z aktualniho stavu RayTraceru (volano pred rayMarch).`r`n	[[nodiscard]] VdbRenderContext buildVdbContext() const;`r`n`r`n	/// Maps a mode token string to the RenderingMode enum (kept for legacy/debug use).
+	/// Sestavi SdfRenderContext z aktualniho (frame-stabilniho) stavu rendereru.
+	[[nodiscard]] SdfRenderContext buildSdfContext() const;
+
+	/// Sestavi VdbRenderContext z aktualniho stavu RayTraceru (volano pred rayMarch).
+	[[nodiscard]] VdbRenderContext buildVdbContext() const;
+
+	/// Sestavi PathTracingContext z aktualniho stavu rendereru.
+	[[nodiscard]] PathTracingContext buildPathTracingContext() const;
+
+	/// Maps a mode token string to the RenderingMode enum (kept for legacy/debug use).
 	/// Defaults to SURFACE_EMBREE for unrecognised strings.
 	RenderingMode ModeFromString(const std::string& modeStr) const;
 
