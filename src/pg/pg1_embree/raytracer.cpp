@@ -56,6 +56,7 @@ RayTracer::RayTracer(const int width, const int height,
 	sdfRenderer_ = std::make_unique<SdfRenderer>();
 	// Vytvor PathTracer (bezstavovy, okamzite pripraveny)
 	pathTracer_ = std::make_unique<PathTracer>();
+	sceneManager_ = std::make_unique<SceneManager>();
 	if (!InitializeOpenVKL()) {
 		std::cerr << "[RAY TRACER WARNING] Failed to initialize OpenVKL" << std::endl;
 	}
@@ -87,21 +88,21 @@ RayTracer::RayTracer(const int width, const int height,
 	// Load scene list from scenes.scn.  Try project-root relative path first
 	// (working directory is pg1_embree/, so 3 levels up reaches pg1/).
 	// Fall back to current directory for alternative working-directory setups.
-	scnScenes_ = SceneLoader::LoadFromFile("../../../scenes.scn");
-	if (scnScenes_.empty())
-		scnScenes_ = SceneLoader::LoadFromFile("scenes.scn");
-	selectedSceneIdx_ = 0;
+	// Nacti seznam scen pres SceneManager
+	if (sceneManager_->loadScenesFromFile("../../../scenes.scn") == 0)
+		sceneManager_->loadScenesFromFile("scenes.scn");
+	sceneManager_->setSelectedIndex(0);
 
-	// Auto-load the default scene so rendering starts immediately on launch.
-	// Prefer the first scene whose name contains "ShaderToy"; fall back to index 0.
-	if (!scnScenes_.empty()) {
-		for (int i = 0; i < static_cast<int>(scnScenes_.size()); ++i) {
-			if (scnScenes_[i].name.find("ShaderToy") != std::string::npos) {
-				selectedSceneIdx_ = i;
+	// Auto-nacti vychozi scenu; preferuj tu s nazvem obsahujicim 'ShaderToy'
+	if (sceneManager_->hasScenes()) {
+		const auto& scenes = sceneManager_->getScenes();
+		for (int i = 0; i < static_cast<int>(scenes.size()); ++i) {
+			if (scenes[i].name.find("ShaderToy") != std::string::npos) {
+				sceneManager_->setSelectedIndex(i);
 				break;
 			}
 		}
-		LoadSceneFromDescription(scnScenes_[selectedSceneIdx_]);
+		LoadSceneFromDescription(sceneManager_->getSelectedScene());
 	}
 
 	std::cout << "[RAY TRACER] Ray Tracer initialized successfully" << std::endl;
@@ -1025,21 +1026,25 @@ int RayTracer::Ui()
 	// ==========================================================================
 	// SCENE SELECTION  — hot-swaps the scene immediately on combo change
 	// ==========================================================================
-	if (scnScenes_.empty()) {
+	if (!sceneManager_->hasScenes()) {
 		ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "No scenes loaded!");
 		ImGui::TextDisabled("Place scenes.scn in the project root and restart.");
 	} else {
+		const auto& scenes = sceneManager_->getScenes();
 		std::vector<const char*> sceneNamePtrs;
-		sceneNamePtrs.reserve(scnScenes_.size());
-		for (const auto& s : scnScenes_) sceneNamePtrs.push_back(s.name.c_str());
+		sceneNamePtrs.reserve(scenes.size());
+		for (const auto& s : scenes) sceneNamePtrs.push_back(s.name.c_str());
 
+		int selIdx = sceneManager_->getSelectedIndex();
 		ImGui::PushItemWidth(-1.0f);
-		if (ImGui::Combo("##scnscene", &selectedSceneIdx_,
-		                 sceneNamePtrs.data(), static_cast<int>(sceneNamePtrs.size())))
-			LoadSceneFromDescription(scnScenes_[selectedSceneIdx_]);
+		if (ImGui::Combo("##scnscene", &selIdx,
+		                 sceneNamePtrs.data(), static_cast<int>(sceneNamePtrs.size()))) {
+			sceneManager_->setSelectedIndex(selIdx);
+			LoadSceneFromDescription(sceneManager_->getSelectedScene());
+		}
 		ImGui::PopItemWidth();
 
-		const SceneDescription& sel = scnScenes_[selectedSceneIdx_];
+		const SceneDescription& sel = scenes[sceneManager_->getSelectedIndex()];
 		if (!sel.entities.empty()) {
 			for (const auto& e : sel.entities)
 				ImGui::TextDisabled("  [%s] %s", e.type.c_str(), e.value.c_str());
@@ -1650,7 +1655,7 @@ void RayTracer::ClearScene()
 	// Shared vertex buffer memory lives inside EntityAnimState::PerGeom::animVerts.
 	// Clearing AFTER the Embree scene release above ensures the scene no longer
 	// holds any reference to those buffers before the vectors are freed.
-	activeEntityAnims_.clear();
+	sceneManager_->clearAnimations();
 	sdfAnimOffset_ = Vector3(0.0f, 0.0f, 0.0f);
 	vdbAnimOffset_ = Vector3(0.0f, 0.0f, 0.0f);
 
@@ -1802,7 +1807,7 @@ void RayTracer::LoadPredefinedScene(SceneType type)
 
 	// Clear any data-driven animation state so UpdateScene falls back to the
 	// legacy hardcoded animation path when this function is called directly.
-	activeLightDescs_.clear();
+	sceneManager_->getLightDescs().clear();
 
 	// Reset volumetric shapes to just the fixed SDF cloud
 	volumetricShapes_.clear();
@@ -2043,7 +2048,7 @@ void RayTracer::LoadSceneFromDescription(const SceneDescription& desc)
 			lights_.push_back(l);
 		}
 		// Store descriptors so UpdateScene can drive per-frame ORBIT animation.
-		activeLightDescs_ = desc.lights;
+		sceneManager_->getLightDescs() = desc.lights;
 		std::cout << "[SceneLoader] " << lights_.size() << " light(s) applied from .scn\n";
 	}
 	// If no lights defined in .scn, the lights from LoadPredefinedScene remain
@@ -2070,7 +2075,7 @@ void RayTracer::LoadSceneFromDescription(const SceneDescription& desc)
 				fillAnim(anim);
 				// Mesh is loaded at the OBJ origin; base position is (0,0,0).
 				if (LoadObjModel(e.value, &anim))
-					activeEntityAnims_.push_back(std::move(anim));
+					sceneManager_->getEntityAnims().push_back(std::move(anim));
 				else
 					std::cout << "[SceneLoader] Failed to load MESH: " << e.value << "\n";
 			} else {
@@ -2085,7 +2090,7 @@ void RayTracer::LoadSceneFromDescription(const SceneDescription& desc)
 				EntityAnimState anim;
 				anim.entityKind = "VDB";
 				fillAnim(anim);
-				activeEntityAnims_.push_back(std::move(anim));
+				sceneManager_->getEntityAnims().push_back(std::move(anim));
 			}
 		}
 		else if (e.type == "SDF") {
@@ -2094,7 +2099,7 @@ void RayTracer::LoadSceneFromDescription(const SceneDescription& desc)
 				EntityAnimState anim;
 				anim.entityKind = "SDF";
 				fillAnim(anim);
-				activeEntityAnims_.push_back(std::move(anim));
+				sceneManager_->getEntityAnims().push_back(std::move(anim));
 			}
 		}
 	}
@@ -2137,197 +2142,33 @@ void RayTracer::LoadSceneFromDescription(const SceneDescription& desc)
 void RayTracer::UpdateScene(const float time)
 {
 	sceneTime_ = time;
-
-	// -------------------------------------------------------------------------
-	// DATA-DRIVEN PATH — populated by LoadSceneFromDescription
-	// -------------------------------------------------------------------------
-	if (!activeLightDescs_.empty()) {
-		const size_t n = std::min(lights_.size(), activeLightDescs_.size());
-		for (size_t i = 0; i < n; ++i) {
-			const LightDesc& ld = activeLightDescs_[i];
-			// Only POINT lights with ORBIT animation need position updates
-			if (ld.type == "POINT" && ld.animType == "ORBIT") {
-				const float theta     = sceneTime_ * ld.animSpeed + ld.animPhase;
-				lights_[i].position.x = ld.px + cosf(theta) * ld.animRadius;
-				lights_[i].position.z = ld.pz + sinf(theta) * ld.animRadius;
-				lights_[i].position.y = ld.py;  // orbit in XZ plane, Y fixed
-			}
-			// DIRECTIONAL lights and STATIC POINT lights: no update needed
-		}
-		UpdateEntityTransforms(sceneTime_);
-		return;
-	}
-
-	// -------------------------------------------------------------------------
-	// LEGACY PATH — hardcoded ShaderToy SDF animation (LoadPredefinedScene)
-	// -------------------------------------------------------------------------
-	// Entity transforms must be updated even when the legacy light path exits
-	// early (e.g. non-ShaderToy scene type or too few lights).
-	if (currentScene_ != SceneType::SCENE_SHADERTOY_SDF) {
-		UpdateEntityTransforms(sceneTime_);
-		return;
-	}
-	if (lights_.size() < 3) {
-		UpdateEntityTransforms(sceneTime_);
-		return;
-	}
-
-	const float kTwoThirdsPi = static_cast<float>(M_PI) * 2.0f / 3.0f;
-	const float kRadius      = 18.5f;
-	const float speed        = 0.7f * lightAnimSpeed_;  // ref: 0.7 rad/s base speed
-
-	const Vector3 colors[3] = {
-		Vector3(1.0f, 0.0f, 1.0f) * 17.0f,
-		Vector3(0.0f, 1.0f, 0.0f) * 17.0f,
-		Vector3(0.0f, 0.0f, 1.0f) * 17.0f,
+	// Sestavi zdroje pro SceneManager a deleguj aktualizaci animaci
+	SceneAnimResources res{
+		lights_,
+		scene_,
+		sceneMutex_,
+		sdfAnimOffset_,
+		vdbAnimOffset_,
+		lightAnimSpeed_,
+		currentScene_
 	};
-
-	for (int i = 0; i < 3; ++i) {
-		const float theta     = sceneTime_ * speed + float(i) * kTwoThirdsPi;
-		lights_[i].position   = Vector3(
-			kRadius * cosf(theta),
-			6.0f + sinf(theta * 2.0f) * 2.5f,   // ref: y = 6 + sin(2t)*2.5
-			kRadius * sinf(theta));
-		lights_[i].color     = colors[i];
-		lights_[i].intensity = 1.0f;
-	}
-
-	// Drive entity animation on every path (data-driven and legacy)
-	UpdateEntityTransforms(sceneTime_);
+	sceneManager_->update(time, res);
 }
 
 //=============================================================================
-// ENTITY ANIMATION (UpdateEntityTransforms)
+// ENTITY TRANSFORMACE -- deleguje na SceneManager
 //=============================================================================
 
-/// Updates animated entity transforms for the given scene time.
-///
-/// MESH entities (ORBIT / HOVER):
-///   Rewrites the application-owned shared vertex buffers with positions
-///   derived from the stored base vertices + the current translation offset,
-///   then marks the buffer modified and recommits the geometry and BVH.
-///   The BVH refit is done with rtcCommitScene which defaults to dynamic-quality
-///   rebuild for RTC_BUILD_QUALITY_MEDIUM (the Embree default).
-///
-/// SDF entities:
-///   Writes sdfAnimOffset_ so VolumetricEffect() can subtract it from each
-///   sample position, effectively moving the SDF cloud without touching any
-///   Shape object.
-///
-/// VDB entities:
-///   Writes vdbAnimOffset_ so VdbVolumeRayMarching() can subtract it from
-///   each vklComputeSample position and from the bounding-box ray test.
-///
-/// THREAD SAFETY: called from UpdateScene() on the main thread between frames.
-/// Render threads hold a shared_lock while reading scene data.  The float writes
-/// to sdfAnimOffset_ / vdbAnimOffset_ and the vertex-buffer modifications are
-/// done without a lock here — they are sequenced before the next pixel dispatch
-/// because MoveCamera() / UpdateScene() run on the main thread and the render
-/// pool picks up the updated data at the start of the following frame.
-/// rtcCommitScene uses its own internal synchronisation.
 void RayTracer::UpdateEntityTransforms(const float time)
 {
-	// Fast-path: avoid lock overhead when no entity animations are registered.
-	if (activeEntityAnims_.empty()) return;
-
-	// THREAD SAFETY: Acquire shared_lock so that ClearScene()'s unique_lock
-	// is forced to WAIT for this function before it releases scene_ or clears
-	// activeEntityAnims_.  Without this lock, ClearScene (UI thread) and
-	// UpdateEntityTransforms (Producer thread) can run concurrently, causing:
-	//   - Iterator invalidation on activeEntityAnims_ (scene 7 SDF/VDB HOVER)
-	//   - rtcCommitScene on a freed scene_ handle (scenes 6/8/9 MESH anim)
-	std::shared_lock<std::shared_mutex> animLock(sceneMutex_);
-
-	// Double-check after acquiring the lock: ClearScene may have cleared
-	// activeEntityAnims_ in the window between the fast-path read and here.
-	if (activeEntityAnims_.empty()) return;
-
-	bool anyMeshUpdated = false;
-
-	for (auto& anim : activeEntityAnims_) {
-		if (anim.animType.empty()) continue;
-
-		// -------------------------------------------------------------------
-		// Compute translation offset from base position
-		// -------------------------------------------------------------------
-		float tx = 0.0f, ty = 0.0f, tz = 0.0f;
-
-		if (anim.animType == "ORBIT") {
-			// Circular XZ orbit around world origin at the given radius.
-			// Offset = orbit position − base position so final vertex =
-			// base_vertex + offset, which places it at the orbiting location.
-			const float theta = time * anim.animSpeed;
-			tx = cosf(theta) * anim.animParam1 - anim.baseX;
-			tz = sinf(theta) * anim.animParam1 - anim.baseZ;
-		} else if (anim.animType == "HOVER") {
-			// Sinusoidal Y-axis displacement around the base height.
-			ty = sinf(time * anim.animSpeed) * anim.animParam1;
-		} else if (anim.animType == "PINGPONG") {
-			// Smooth back-and-forth lerp between base and target using a sine
-			// clock.  t oscillates continuously in [0, 1]:
-			//   t = (sin(time * speed) + 1) / 2
-			// currentPos = lerp(base, target, t)
-			// tx/ty/tz are the translation OFFSET from base, so:
-			//   tx = t * (targetX - baseX)  etc.
-			const float t = (sinf(time * anim.animSpeed) + 1.0f) * 0.5f;
-			tx = t * (anim.targetX - anim.baseX);
-			ty = t * (anim.targetY - anim.baseY);
-			tz = t * (anim.targetZ - anim.baseZ);
-		} else if (anim.animType == "TOWARDS") {
-			// One-shot arrival: the entity STARTS displaced to the world-space
-			// position given by (targetX, targetY, targetZ) and smoothly converges
-			// to its natural base position as time advances.
-			//
-			//   offset(t) = (1 - clamp(t*speed, 0, 1)) * (target - base)
-			//
-			// t=0        : entity at (base + target - base) = target  [start]
-			// t>=1/speed : t clamps to 1; entity rests at base        [arrival]
-			//
-			// scenes.scn syntax:  TOWARDS speed tX tY tZ
-			//   Entity starts at world-space position (tX, tY, tZ) and arrives
-			//   at its natural (OBJ-loaded / SDF-origin / VDB-origin) base position.
-			const float t = std::min(time * anim.animSpeed, 1.0f);
-			tx = (1.0f - t) * (anim.targetX - anim.baseX);
-			ty = (1.0f - t) * (anim.targetY - anim.baseY);
-			tz = (1.0f - t) * (anim.targetZ - anim.baseZ);
-		}
-
-		// -------------------------------------------------------------------
-		// Apply to entity
-		// -------------------------------------------------------------------
-		if (anim.entityKind == "MESH") {
-			for (auto& g : anim.geoms) {
-				const int n = static_cast<int>(g.animVerts.size());
-				for (int i = 0; i < n; ++i) {
-					g.animVerts[i].x = g.baseVerts[i].x + tx;
-					g.animVerts[i].y = g.baseVerts[i].y + ty;
-					g.animVerts[i].z = g.baseVerts[i].z + tz;
-				}
-				// Retrieve geometry handle using the THREAD-SAFE variant.
-				// rtcGetGeometry (the non-TS variant) is documented for use inside
-				// intersection callbacks only; UpdateEntityTransforms is modification
-				// code and must use rtcGetGeometryThreadSafe to avoid triggering
-				// Embree internal debug assertions that call through a function pointer.
-				RTCGeometry geom = rtcGetGeometryThreadSafe(scene_, g.geomID);
-				if (geom) {
-					rtcUpdateGeometryBuffer(geom, RTC_BUFFER_TYPE_VERTEX, 0);
-					rtcCommitGeometry(geom);
-					rtcReleaseGeometry(geom);
-					anyMeshUpdated = true;
-				}
-			}
-		} else if (anim.entityKind == "SDF") {
-			sdfAnimOffset_.x = anim.baseX + tx;
-			sdfAnimOffset_.y = anim.baseY + ty;
-			sdfAnimOffset_.z = anim.baseZ + tz;
-		} else if (anim.entityKind == "VDB") {
-			vdbAnimOffset_.x = anim.baseX + tx;
-			vdbAnimOffset_.y = anim.baseY + ty;
-			vdbAnimOffset_.z = anim.baseZ + tz;
-		}
-	}
-
-	// Recommit BVH once after all mesh updates (cheaper than per-geometry commit)
-	if (anyMeshUpdated)
-		rtcCommitScene(scene_);
+	SceneAnimResources res{
+		lights_,
+		scene_,
+		sceneMutex_,
+		sdfAnimOffset_,
+		vdbAnimOffset_,
+		lightAnimSpeed_,
+		currentScene_
+	};
+	sceneManager_->updateEntityTransforms(time, res);
 }

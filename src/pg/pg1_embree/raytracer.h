@@ -22,6 +22,7 @@
 #include <shared_mutex>
 #include <atomic>
 #include <chrono>
+#include "SceneManager.h"
 #include "RenderTypes.h"
 
 
@@ -81,39 +82,7 @@ struct ModelInfo {
 	Transform transform;  // Transformation to apply to the model
 };
 
-/// Per-entity animation state, populated by LoadSceneFromDescription when a .scn
-/// entity line carries an ORBIT or HOVER animation block.
-///
-/// MESH entities: Embree vertex buffers are shared with application memory so the
-/// positions can be rewritten each frame from the stored base vertex copies.
-///
-/// SDF/VDB entities: no geometry buffers — the ray-march code applies the computed
-/// translation offset (sdfAnimOffset_ / vdbAnimOffset_) to incoming rays each frame.
-struct EntityAnimState {
-	std::string entityKind;  ///< "MESH", "SDF", or "VDB"
-	std::string animType;    ///< "ORBIT", "HOVER", "PINGPONG", "TOWARDS", or "" (static)
-	float animSpeed{0.0f};   ///< Angular velocity (ORBIT/HOVER) or lerp rate (PINGPONG/TOWARDS)
-	float animParam1{0.0f};  ///< Orbit radius (ORBIT) or hover amplitude (HOVER)
-	float baseX{0.0f};       ///< Base world X (origin for OBJ meshes loaded without a transform)
-	float baseY{0.0f};       ///< Base world Y
-	float baseZ{0.0f};       ///< Base world Z
-	/// World-space position used by PINGPONG and TOWARDS.
-	/// For PINGPONG : entity oscillates between (baseX,baseY,baseZ) and this point.
-	/// For TOWARDS  : entity STARTS at this world-space position and arrives at
-	///                (baseX, baseY, baseZ) as time advances (t clamped at 1).
-	///                i.e. offset(t) = (1-t) * (target - base).
-	float targetX{0.0f};
-	float targetY{0.0f};
-	float targetZ{0.0f};
 
-	/// Per-Embree-geometry data — one entry per Surface inside the loaded OBJ.
-	struct PerGeom {
-		unsigned int geomID{RTC_INVALID_GEOMETRY_ID};
-		std::vector<Vertex3f> baseVerts;  ///< Original positions; never mutated after loading
-		std::vector<Vertex3f> animVerts;  ///< Shared with Embree; rewritten every frame
-	};
-	std::vector<PerGeom> geoms;  ///< Populated only when entityKind == "MESH"
-};
 
 // Main ray tracer class, inheriting from SimpleGuiDX11 for GUI and rendering support
 class RayTracer : public SimpleGuiDX11
@@ -335,6 +304,9 @@ private:
 	/// Bezstavova trida pro Monte Carlo sledovani cest.
 	std::unique_ptr<PathTracer> pathTracer_;
 
+	/// Spravce stavu sceny -- animace, popis scen, svetla.
+	std::unique_ptr<SceneManager> sceneManager_;
+
 	// =========================================================================
 	// CAMERA & LIGHTS
 	// =========================================================================
@@ -423,8 +395,7 @@ private:
 
 	RenderingMode      currentRenderingMode_{ RenderingMode::SURFACE_EMBREE };
 	SceneType          currentScene_{ SceneType::SCENE_SHADERTOY_SDF };
-	float              sceneTime_{ 0.0f }; ///< Accumulated animation time (seconds)
-
+	float              sceneTime_{ 0.0f }; ///< Casovac animace sceny (sekund)
 	/// High-level render filter — set by the UI, consumed by ResolveActiveMode().
 	/// Cached into currentRenderingMode_ once per frame in MoveCamera().
 	GlobalRenderFilter currentFilter_{ GlobalRenderFilter::COMBINED };
@@ -476,20 +447,8 @@ private:
 	char vdbGridName_[64]{ "density" };
 
 	// =========================================================================
-	// SCENE CONFIGURATION LOADER  (.scn file)
+	// SCENE CONFIGURATION LOADER  (delegovano na SceneManager)
 	// =========================================================================
-
-	std::vector<SceneDescription> scnScenes_;  ///< Scenes parsed from scenes.scn
-	int selectedSceneIdx_{ 0 };                ///< Currently highlighted scene in SETUP combo
-
-	/// LightDesc list for the active scene (set by LoadSceneFromDescription,
-	/// cleared by LoadPredefinedScene).  Non-empty = use data-driven ORBIT
-	/// animation in UpdateScene instead of the legacy hardcoded path.
-	std::vector<LightDesc> activeLightDescs_;
-
-	/// Per-entity animation state populated by LoadSceneFromDescription.
-	/// Cleared by ClearScene() before each new scene load.
-	std::vector<EntityAnimState> activeEntityAnims_;
 
 	// =========================================================================
 	// RENDER PROGRESS TRACKING
